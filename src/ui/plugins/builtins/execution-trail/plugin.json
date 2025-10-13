@@ -1,0 +1,14 @@
+{
+  "id": "com.hush.core.execution-trail",
+  "displayName": "核心执行轨迹徽标",
+  "version": "0.1.0",
+  "entry": "./pluginModule.tsx",
+  "capabilities": ["overlay"],
+  "requiredEvents": ["runtime:state-change"],
+  "requiredMcpTools": [],
+  "permissions": {
+    "allowPlanMutation": false,
+    "allowTaskExecution": false
+  },
+  "targets": ["web-ui"]
+}

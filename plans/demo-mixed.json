@@ -1,0 +1,36 @@
+{
+  "id": "demo-mixed",
+  "version": "v1",
+  "entry": "root",
+  "nodes": [
+    {
+      "id": "root",
+      "type": "sequence",
+      "children": ["n-local", "n-agent", "n-mcp"]
+    },
+    {
+      "id": "n-local",
+      "type": "local_task",
+      "driver": "shell",
+      "command": "echo",
+      "args": ["hello from local task"]
+    },
+    {
+      "id": "n-agent",
+      "type": "agent_invocation",
+      "agentName": "demand-analysis",
+      "input": {
+        "document": "项目背景：示例自动执行"
+      }
+    },
+    {
+      "id": "n-mcp",
+      "type": "mcp_tool",
+      "server": "default",
+      "toolName": "system.info",
+      "arguments": {},
+      "requiresApproval": true,
+      "riskLevel": "high"
+    }
+  ]
+}

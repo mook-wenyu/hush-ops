@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "types": ["vite/client", "@testing-library/jest-dom"],
+    "baseUrl": "."
+  },
+  "include": [
+    "src/ui/**/*",
+    "tests/ui/**/*"
+  ],
+  "exclude": []
+}

@@ -1,0 +1,54 @@
+{
+  "id": 1,
+  "generatedAt": "2025-10-10T09:35:00+08:00",
+  "questions": [
+    {
+      "topic": "MCP GUI 自动执行验收脚本",
+      "detail": "极简方案已取消自动验收脚本，保留手动 CLI/GUI 验收路径；2025-10-12 归档。",
+      "status": "archived",
+      "priority": "low"
+    },
+    {
+      "topic": "持久化与日志多流计划",
+      "detail": "检查点与审批存储全面切换为 JSON 文件，日志改为单流 `logs/app.jsonl`，备份脚本改为文件打包；后续仅需按测试矩阵定期演练。",
+      "status": "resolved",
+      "priority": "high"
+    },
+    {
+      "topic": "真实 MCP 服务器联调策略",
+      "detail": "计划在任务 `6eda280b-c52e-4bb3-be7e-976c31301dde` 中提供 CLI/SDK 配置指南（`ORCHESTRATOR_BASE_URL`、`MCP_ENDPOINT`），并编写联调脚本：1）文档化本地拉起官方 MCP Server 步骤；2）扩展 `npm run cli -- run:auto` 支持外部凭据；3）在 `docs/deployment-local.md` 补充断线重连演练与安全日志要求；目标 M3 完成。",
+      "status": "planned",
+      "priority": "medium"
+    },
+    {
+      "topic": "Temporal 长流程接入节奏",
+      "detail": "Registry GitOps 与事件总线治理已取消，Temporal 长流程接入暂不推进；2025-10-12 归档。",
+      "status": "archived",
+      "priority": "low"
+    },
+    {
+      "topic": "JSON Logic 边界策略",
+      "detail": "需确认条件/循环节点的 JSON Logic 表达式容错策略与 sharedState 记录格式，避免复杂表达式导致执行中断。",
+      "status": "resolved",
+      "priority": "high"
+    },
+    {
+      "topic": "普通任务失败恢复",
+      "detail": "local_task 重试与分类策略如何与 retryPolicy/检查点协同？需要明确日志与审批通知流程。",
+      "status": "resolved",
+      "priority": "high"
+    },
+    {
+      "topic": "开源库替换实施顺序",
+      "detail": "`docs/library-alignment.md` 已列出阶段化顺序，当前以 execa/got/Croner/JSON Logic 完成首波；better-sqlite3 方案已取消，改用 JSON 文件持久化。",
+      "status": "resolved",
+      "priority": "high"
+    },
+    {
+      "topic": "共享 Schema 模块迁移影响",
+      "detail": "Plan/Agent Schema 已迁移至 src/shared/schemas，CLI/测试同步完成，无需兼容层。",
+      "status": "resolved",
+      "priority": "medium"
+    }
+  ]
+}

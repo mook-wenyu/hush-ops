@@ -1,0 +1,32 @@
+{
+  "id": "demand-analysis",
+  "module": "../src/agents/plugins/demandAnalysis.ts",
+  "register": {
+    "export": "registerDemandAnalysisPlugin",
+    "options": {
+      "replace": true
+    }
+  },
+  "ensure": {
+    "export": "ensureDemandAnalysisPlugin"
+  },
+  "defaultAgentOptions": {
+    "name": "需求分析示例智能体",
+    "reasoningEffort": "high",
+    "useChatCompletions": true
+  },
+  "defaultRunOptions": {
+    "context": {
+      "projectName": "需求分析专家演示",
+      "stakeholders": ["产品经理", "业务分析师"],
+      "targetWindow": "2025-Q1",
+      "strategicGoals": ["提高需求确认效率", "减少需求变更"]
+    }
+  },
+  "metadata": {
+    "label": "默认需求分析插件",
+    "description": "展示如何通过配置自动注册并运行需求分析示例",
+    "tags": ["demo", "requirements"]
+  },
+  "configVersion": "v1"
+}

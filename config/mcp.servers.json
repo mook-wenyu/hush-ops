@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "local-filesystem": {
+      "description": "默认示例：连接本地文件系统 MCP 服务器",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "./"
+      ],
+      "workingDirectory": ".",
+      "endpoint": "http://127.0.0.1:9020/mcp",
+      "autoStart": false,
+      "headers": {
+        "User-Agent": "hush-ops"
+      },
+      "retry": {
+        "initialDelayMs": 2000,
+        "multiplier": 2,
+        "maxDelayMs": 60000,
+        "maxAttempts": 5
+      },
+      "session": {
+        "userId": "default"
+      }
+    }
+  }
+}

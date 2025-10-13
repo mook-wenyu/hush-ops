@@ -1,0 +1,9 @@
+{
+  "id": "com.hush.core.mcp-tool-explorer",
+  "displayName": "MCP 工具浏览器",
+  "version": "0.1.0",
+  "entry": "./pluginModule.tsx",
+  "capabilities": ["side-panel", "command-launcher", "mcp-tool-invoke"],
+  "requiredMcpTools": ["search_web"],
+  "targets": ["web-ui"]
+}

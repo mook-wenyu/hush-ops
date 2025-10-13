@@ -1,0 +1,88 @@
+{
+  "timestamp": "2025-10-10T09:35:00+08:00",
+  "workspace": {
+    "root": "D:/TSProjects/hush-ops",
+    "language": "TypeScript",
+    "packageManager": "npm",
+    "envRequirements": [
+      "OPENAI_API_KEY (必填)",
+      "OPENAI_BASE_URL (可选)",
+      "MCP_SERVER_ENDPOINT (可选，用于真实 Bridge)",
+      "TEMPORAL_ADDRESS (默认 127.0.0.1:7233)"
+    ]
+  },
+  "structure": {
+    "src/agents/plugins/": {
+      "role": "插件化 AI 智能体目录，默认含 demandAnalysis 示例；未来可按配置动态扩展",
+      "keyFiles": [
+        "plugins/types.ts —— 定义插件接口、元数据、创建方法",
+        "plugins/demandAnalysis.ts —— 示例插件 register/ensure 函数"
+      ]
+    },
+    "src/agents/config/": {
+      "role": "智能体配置 Schema 与加载器，支持 agents-config/*.json 动态注册",
+      "keyFiles": [
+        "schema.ts —— zod Schema，含 configVersion/id/register/ensure/default 结构",
+        "loader.ts —— 解析 JSON、动态 import 模块、调用 register/ensure",
+        "index.ts —— 汇总导出"
+      ]
+    },
+    "src/agents/registry.ts": {
+      "role": "插件注册表，提供 registerAgentPlugin/getAgentPlugin/clearAgentPlugins",
+      "notes": "已与配置加载器和示例 CLI 接轨，默认示例走插件化流程"
+    },
+    "src/orchestrator/executor/executor.ts": {
+      "role": "LangGraph 驱动的执行器，实现 dryRun/execute、审批钩子、JSON Logic 条件、Loop 状态",
+      "dependencies": [
+        "@langchain/langgraph",
+        "json-logic-js",
+        "src/orchestrator/adapters/*",
+        "src/shared/logging/logger.ts"
+      ]
+    },
+    "src/orchestrator/adapters/localTask.ts": {
+      "role": "普通任务适配器（shell/http/file/scheduled），封装 execa/got/Croner，写入共享状态",
+      "risk": "shell/http 操作需结合审批与安全日志"
+    },
+    "src/mcp/bridge/bridgeClient.ts": {
+      "role": "基于 MCP SDK 的 Bridge 客户端，管理状态机、指数退避、事件广播",
+      "related": [
+        "src/mcp/bridge/session.ts —— 共享会话、listTools/callTool 封装",
+        "tests/mcp/bridgeClient.spec.ts —— 覆盖断线、工具调用"
+      ]
+    },
+    "src/shared/logging/logger.ts": {
+      "role": "统一 Pino Logger，输出 logs/app.jsonl，提供 createLoggerFacade",
+      "todo": "未来扩展 multi-stream/security 日志"
+    },
+    "scripts/run-auto-exec.ts": {
+      "role": "自动连续执行脚本，加载 Plan JSON/示例计划，支持审批等待、断线重试",
+      "usage": "npm run auto:run -- --plan ./plans/demo.json"
+    }
+  },
+  "tests": {
+    "framework": "Vitest",
+    "files": {
+      "tests/agents/agentConfig.spec.ts": "验证配置加载/注册流程及异常",
+      "tests/orchestrator/executor.spec.ts": "覆盖执行器成功/失败路径、审批模拟",
+      "tests/integration/autoExecute.spec.ts": "串联 local_task + agent_invocation + mcp_tool + 断线重连",
+      "tests/mcp/bridgeClient.spec.ts": "模拟 MCP 传输、状态机、通知回放"
+    },
+    "requiredCommands": [
+      "npm run lint",
+      "npm run typecheck",
+      "npm run test"
+    ]
+  },
+  "observations": [
+    "docs/architecture.md 与 docs/library-alignment.md 定义了模块边界与开源库策略，需与 PLAN/TASKS 同步",
+    "日志目录 logs/ 提供 app.jsonl、安全/执行日志尚在规划；scripts/logrotate.* 已就位",
+    "Plan Schema、Agent Schema 已集中到 src/shared/schemas，CLI/测试均引用该目录",
+    "Temporal 与真实 MCP 服务尚未联调，部署手册当前描述 dev 模式与备份策略"
+  ],
+  "integrationHooks": {
+    "agentsConfig": "agents:config CLI 可生成/列出配置；registerConfiguredAgents 会动态注册插件",
+    "mcpBridge": "BridgeClient 广播 bridge:* 事件，runtime 监听并向 GUI/CLI 推送",
+    "checkpointStore": "默认使用 JSON 存储，不再引入 better-sqlite3"
+  }
+}

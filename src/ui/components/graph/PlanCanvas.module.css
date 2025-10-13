@@ -1,0 +1,24 @@
+.planNode {
+  background: rgba(19, 22, 30, 0.9);
+  border: 1px solid rgba(92, 102, 122, 0.35);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+.planNode.pending {
+  border-color: var(--color-brand-warning);
+  box-shadow: 0 10px 26px rgba(255, 216, 89, 0.24);
+}
+.planNode.active {
+  border-color: var(--color-brand);
+  box-shadow: 0 14px 32px rgba(140, 75, 255, 0.35);
+}
+.planNode.completed {
+  border-color: var(--color-brand-accent);
+  box-shadow: 0 12px 26px rgba(56, 201, 93, 0.28);
+}
+.planNode.selected {
+  border-color: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 12px 28px rgba(116, 205, 255, 0.32);
+}
