@@ -49,10 +49,25 @@
     "openai",
     "agents",
     "requirements",
-    "analysis"
+    "analysis",
+    "orchestration",
+    "scheduling",
+    "workflow",
+    "mcp",
+    "langgraph",
+    "fastify",
+    "react"
   ],
-  "author": "",
+  "author": "mook-wenyu",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mook-wenyu/hush-ops.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mook-wenyu/hush-ops/issues"
+  },
+  "homepage": "https://github.com/mook-wenyu/hush-ops#readme",
   "dependencies": {
     "@fastify/multipart": "^8.3.0",
     "@fastify/websocket": "^8.3.0",
