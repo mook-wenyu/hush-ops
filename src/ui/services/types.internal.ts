@@ -1,0 +1,1 @@
+export interface CompileResponse { plan: unknown; diagnostics: Array<{ code?: string; severity: string; message: string; nodeId?: string; edgeId?: string }> }

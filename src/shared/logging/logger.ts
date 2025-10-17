@@ -1,15 +1,13 @@
-import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import pino, { type Logger, type LoggerOptions } from "pino";
 
 import type { LogEventCategory, LogsAppendedPayload } from "./events.js";
+import { getHushOpsLogsDirectory } from "../environment/pathResolver.js";
 
-export const LOG_ROOT = resolve("logs");
+export const LOG_ROOT = getHushOpsLogsDirectory();
 
 const LOG_FILE = "app.jsonl";
-
-mkdirSync(LOG_ROOT, { recursive: true });
 
 const destination = pino.destination({
   dest: join(LOG_ROOT, LOG_FILE),

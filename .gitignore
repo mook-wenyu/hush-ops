@@ -44,6 +44,7 @@ node_modules/.cache/
 dist/
 dist-*/
 build/
+storybook-static/
 tmp/
 temp/
 build/Release/

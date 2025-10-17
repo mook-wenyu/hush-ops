@@ -1,6 +1,9 @@
 import { Command, Flags } from "@oclif/core";
 
 import { createApprovalStore, fetchPendingEntries, formatPendingEntry } from "../../approvals.js";
+import { joinStatePath } from "../../../shared/environment/pathResolver.js";
+
+const DEFAULT_APPROVAL_DIRECTORY = joinStatePath("approvals");
 
 export default class ApprovalsPending extends Command {
   static summary = "列出所有待审批节点";
@@ -9,7 +12,7 @@ export default class ApprovalsPending extends Command {
 
   static flags = {
     database: Flags.string({
-      description: "指定审批存储目录（默认 state/approvals）"
+      description: `指定审批存储目录（默认 ${DEFAULT_APPROVAL_DIRECTORY}）`
     })
   } as const;
 

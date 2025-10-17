@@ -1,0 +1,10 @@
+{
+  "id": "example-forbid-approval",
+  "version": "v1",
+  "entry": "root",
+  "schedule": { "enabled": false, "kind": "cron", "cron": "*/15 * * * *", "concurrency": "forbid" },
+  "nodes": [
+    { "id": "root", "type": "sequence", "children": ["approval"] },
+    { "id": "approval", "type": "human_approval", "approvalId": "example-approval", "message": "示例：审批后继续", "timeoutSeconds": 3600 }
+  ]
+}

@@ -11,7 +11,7 @@ export interface LoadedAgentConfig {
 }
 
 export interface RegisterConfiguredAgentsOptions {
-  /** 自定义配置目录，默认读取工作目录下的 agents-config */
+  /** 自定义配置目录，默认读取 `.hush-ops/config/agents` */
   directory?: string;
   /** 当存在多个配置时可以通过过滤器控制加载 */
   filter?: (config: AgentConfig) => boolean;

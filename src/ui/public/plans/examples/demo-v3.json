@@ -1,0 +1,22 @@
+{
+  "id": "demo-v3",
+  "version": "v3.0.0",
+  "entry": "start",
+  "description": "示例：Plan v3 显式 edges，串并行 + 审批 + 本地任务 + MCP 工具",
+  "nodes": [
+    { "id": "start", "type": "sequence", "name": "开始" },
+    { "id": "taskA", "type": "local_task", "name": "本地脚本A", "effectScope": "process", "description": "echo A" },
+    { "id": "taskB", "type": "local_task", "name": "本地脚本B", "effectScope": "filesystem", "description": "写文件" },
+    { "id": "gate", "type": "human_approval", "name": "审批关口", "approvalId": "ap-1", "message": "是否继续?" },
+    { "id": "mcp1", "type": "mcp_tool", "name": "MCP 查询", "server": "default", "toolName": "search" },
+    { "id": "done", "type": "sequence", "name": "完成" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start", "target": "taskA" },
+    { "id": "e2", "source": "start", "target": "taskB" },
+    { "id": "e3", "source": "taskA", "target": "gate" },
+    { "id": "e4", "source": "taskB", "target": "gate" },
+    { "id": "e5", "source": "gate", "target": "mcp1" },
+    { "id": "e6", "source": "mcp1", "target": "done" }
+  ]
+}

@@ -1,4 +1,6 @@
 import type { ExecutionRecord } from "../types/orchestrator";
+import { EmptyState } from "./EmptyState";
+import { cn, cardClasses, cardBodyClasses } from "../utils/classNames";
 
 interface ExecutionListProps {
   executions: ExecutionRecord[];
@@ -26,8 +28,8 @@ export function ExecutionList({
   stopProcessingId
 }: ExecutionListProps) {
   return (
-    <div className="card bg-base-300/70 shadow-xl">
-      <div className="card-body space-y-4">
+    <div className={cardClasses({ variant: 'nested' })}>
+      <div className={cardBodyClasses()}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="card-title text-lg">执行列表</h2>
           <button
@@ -40,12 +42,12 @@ export function ExecutionList({
           </button>
         </div>
         {executions.length === 0 ? (
-          <div className="text-sm text-base-content/60 text-center py-8">暂无执行记录</div>
+          <EmptyState title="暂无执行记录" />
         ) : (
           <div className="flex flex-col gap-3">
             {executions.map((execution) => (
-              <article key={execution.id} className="card bg-base-200/70 border border-base-content/10">
-                <div className="card-body space-y-2 p-4 text-sm">
+              <article key={execution.id} className={cardClasses({ bordered: true })}>
+                <div className={cardBodyClasses({ compact: true })}>
                   <div className="flex flex-wrap items-center gap-2">
                     <strong className="text-base">{execution.planId}</strong>
                     <span className="text-base-content/60">
@@ -65,7 +67,9 @@ export function ExecutionList({
                     <div className="pt-2">
                       <button
                         type="button"
-                        className="btn btn-outline btn-error btn-xs"
+                        className={cn('btn btn-outline btn-error btn-xs', {
+                          'btn-disabled': disabled || stopProcessingId === execution.id
+                        })}
                         onClick={() => onStop(execution.id)}
                         disabled={disabled || stopProcessingId === execution.id}
                       >

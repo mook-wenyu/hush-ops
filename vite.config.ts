@@ -7,6 +7,7 @@ const UI_ROOT = resolve(__dirname, "src/ui");
 
 export default defineConfig({
   root: UI_ROOT,
+  publicDir: resolve(UI_ROOT, "public"), // 静态资源目录
   plugins: [tailwindcss(), react()],
   server: {
     host: "127.0.0.1",
@@ -22,11 +23,23 @@ export default defineConfig({
   },
   preview: {
     host: "127.0.0.1",
-    port: 4173
+    port: 4173,
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:3000",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, "/api")
+      }
+    }
   },
   build: {
     outDir: resolve(__dirname, "dist/ui"),
     emptyOutDir: true,
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      input: {
+        main: resolve(UI_ROOT, "index.html")
+      }
+    }
   }
 });

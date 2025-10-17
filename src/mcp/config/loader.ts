@@ -1,7 +1,10 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
+
+import { joinConfigPath } from "../../shared/environment/pathResolver.js";
 
 export interface McpServerRetryOptions {
   readonly initialDelayMs?: number;
@@ -41,7 +44,8 @@ interface CachedEntry {
 }
 
 const ENV_CONFIG_PATH = "MCP_SERVERS_CONFIG_PATH";
-const DEFAULT_CONFIG_PATH = path.resolve("config", "mcp.servers.json");
+const USER_CONFIG_PATH = joinConfigPath("mcp.servers.json");
+const REPO_CONFIG_PATH = path.resolve("config", "mcp.servers.json");
 
 const RetrySchema = z
   .object({
@@ -95,7 +99,13 @@ function resolveConfigPath(customPath?: string): string {
   if (explicit && explicit.trim().length > 0) {
     return path.resolve(explicit.trim());
   }
-  return DEFAULT_CONFIG_PATH;
+  if (existsSync(USER_CONFIG_PATH)) {
+    return USER_CONFIG_PATH;
+  }
+  if (existsSync(REPO_CONFIG_PATH)) {
+    return REPO_CONFIG_PATH;
+  }
+  return USER_CONFIG_PATH;
 }
 
 async function readConfigFile(configPath: string): Promise<unknown> {
@@ -196,7 +206,7 @@ export async function getMcpServerConfig(name: string, options: LoadOptions = {}
   const { configs } = await loadConfig(options);
   const config = configs.get(name);
   if (!config) {
-    throw new Error(`未找到名为 ${name} 的 MCP server，请检查 config/mcp.servers.json`);
+    throw new Error(`未找到名为 ${name} 的 MCP server，请检查 .hush-ops/config/mcp.servers.json`);
   }
   return config;
 }

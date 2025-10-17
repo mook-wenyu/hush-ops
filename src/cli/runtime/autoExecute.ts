@@ -93,7 +93,7 @@ async function resolveServerConfig(preferred?: string): Promise<McpServerConfig>
   }
   const servers = await listMcpServers();
   if (servers.length === 0) {
-    throw new Error("未在 config/mcp.servers.json 配置任何 MCP server，无法建立桥接连接。");
+    throw new Error("未在 .hush-ops/config/mcp.servers.json 配置任何 MCP server，无法建立桥接连接。");
   }
   const [first] = servers;
   if (!first) {
@@ -180,6 +180,7 @@ export async function runAutoExecution(options: AutoExecuteOptions) {
     const output = await runtime.start();
     return output;
   } finally {
+    approvalController.close();
     await session.disconnect?.();
   }
 }

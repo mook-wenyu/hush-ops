@@ -353,6 +353,10 @@ export class PluginRuntime {
     };
   }
 
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
   dispose(): void {
     if (this.disposed) {
       return;

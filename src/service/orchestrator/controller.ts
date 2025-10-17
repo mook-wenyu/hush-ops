@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { dirname, extname, resolve as resolvePath } from "node:path";
 import { EventEmitter } from "node:events";
+import pLimit from "p-limit";
 
 import { loadPlan } from "../../orchestrator/plan/index.js";
-import type { Plan } from "../../orchestrator/plan/index.js";
 import { createDefaultExecutionContext, dryRun } from "../../orchestrator/executor/executor.js";
 import type { ExecutionResult } from "../../orchestrator/executor/types.js";
 import type {
@@ -33,13 +33,13 @@ import type { LoggerFacade } from "../../shared/logging/logger.js";
 import { registerConfiguredAgents } from "../../agents/config/index.js";
 import { getAgentPlugin } from "../../agents/registry.js";
 import { createMockBridgeSession } from "../../cli/runtime/autoExecute.js";
-import { PlanSchema } from "../../shared/schemas/plan.js";
 import type { DryRunSummary } from "../../orchestrator/executor/types.js";
 import {
   getMcpServerConfig,
   listMcpServers,
   type McpServerConfig
 } from "../../mcp/config/loader.js";
+import { getHushOpsStateDirectory } from "../../shared/environment/pathResolver.js";
 
 export interface ExecutePlanRequest {
   readonly plan: unknown;
@@ -63,6 +63,7 @@ export interface OrchestratorControllerOptions {
   readonly defaultUseMockBridge?: boolean;
   readonly approvalStore?: ApprovalStore;
   readonly toolStreamStore?: ToolStreamStore;
+  readonly maxConcurrency?: number; // 0/undefined 表示不限制
 }
 
 export interface ExecutionRecord {
@@ -119,7 +120,7 @@ interface BridgeSessionResult {
 
 function resolveStorageDirectory(databasePath?: string): string {
   if (!databasePath || databasePath.trim().length === 0) {
-    return resolvePath("state");
+    return getHushOpsStateDirectory();
   }
   const absolute = resolvePath(databasePath);
   if (extname(absolute)) {
@@ -141,7 +142,7 @@ async function resolveServerConfigForRequest(
   }
   const servers = await listMcpServers();
   if (servers.length === 0) {
-    throw new Error("未在 config/mcp.servers.json 配置任何 MCP server，无法建立桥接连接。");
+    throw new Error("未在 .hush-ops/config/mcp.servers.json 配置任何 MCP server，无法建立桥接连接。");
   }
   const [first] = servers;
   if (!first) {
@@ -197,6 +198,9 @@ export class OrchestratorController extends EventEmitter {
 
   private readonly executionRuntimes = new Map<string, OrchestratorRuntime>();
 
+  // 计划级并发门控：记录当前正在运行的 planId -> executionId
+  private readonly activePlanExecutions = new Map<string, string>();
+
   private readonly options: OrchestratorControllerOptions;
 
   private readonly approvalStore: ApprovalStore;
@@ -204,6 +208,9 @@ export class OrchestratorController extends EventEmitter {
   private readonly toolStreamStore: ToolStreamStore;
 
   private readonly ownsToolStreamStore: boolean;
+
+  // 全局并发门控（使用 p-limit）
+  private readonly concurrencyLimit: ReturnType<typeof pLimit> | null;
 
   constructor(options: OrchestratorControllerOptions = {}) {
     super();
@@ -220,6 +227,13 @@ export class OrchestratorController extends EventEmitter {
       });
       this.ownsToolStreamStore = true;
     }
+    const envLimit = Number(process.env.ORCHESTRATOR_MAX_CONCURRENCY);
+    const limitFromOptions = options.maxConcurrency;
+    const computed = Number.isFinite(limitFromOptions as number)
+      ? (limitFromOptions as number)
+      : (Number.isFinite(envLimit) ? envLimit : 0);
+    const maxConcurrency = computed > 0 ? Math.floor(computed) : 0;
+    this.concurrencyLimit = maxConcurrency > 0 ? pLimit(maxConcurrency) : null;
   }
 
   private buildSnapshot(record: ExecutionRecord): ExecutionSnapshot {
@@ -269,8 +283,22 @@ export class OrchestratorController extends EventEmitter {
       throw new Error(`找不到执行 ${id}`);
     }
     if (record.status !== "running") {
+      // 如果未在运行中，直接取消
+      record.status = "cancelled";
+      record.executionStatus = "cancelled";
+      record.running = false;
+      record.finishedAt = new Date().toISOString();
+      record.error = undefined;
+      record.pendingApprovals = [];
+      const activeId2 = this.activePlanExecutions.get(record.planId);
+      if (activeId2 === id) {
+        this.activePlanExecutions.delete(record.planId);
+      }
+      this.emit("execution.cancelled", { executionId: id, planId: record.planId });
+      this.emitSnapshot(id);
       return record;
     }
+
     const runtime = this.executionRuntimes.get(id);
     if (runtime) {
       await runtime.stop();
@@ -282,14 +310,19 @@ export class OrchestratorController extends EventEmitter {
     record.finishedAt = new Date().toISOString();
     record.error = undefined;
     record.pendingApprovals = [];
+    // 释放计划级并发占用
+    const activeId = this.activePlanExecutions.get(record.planId);
+    if (activeId === id) {
+      this.activePlanExecutions.delete(record.planId);
+    }
     this.emit("execution.cancelled", { executionId: id, planId: record.planId });
     this.emitSnapshot(id);
     return record;
   }
 
   async validate(request: ValidationRequest): Promise<ValidateResult> {
-    const parsedPlan = PlanSchema.parse(request.plan);
-    const planContext = loadPlan(parsedPlan);
+    // 统一入口：loader 支持 v1(children) 与 v3(edges)
+    const planContext = loadPlan(request.plan);
     await registerConfiguredAgents();
     getAgentPlugin("demand-analysis");
     const mockSession = await createMockBridgeSession();
@@ -307,8 +340,26 @@ export class OrchestratorController extends EventEmitter {
   }
 
   async execute(request: ExecutePlanRequest): Promise<ExecutionRecord> {
-    const parsedPlan = PlanSchema.parse(request.plan as Plan);
-    const planContext = loadPlan(parsedPlan);
+    // 解析计划，并读取顶层调度并发策略（若存在）
+    const rawPlan = request.plan as Record<string, unknown> | undefined;
+    const planContext = loadPlan(request.plan);
+
+    // 并发门控：当 schedule.concurrency === 'forbid' 时，如果已有同 planId 的运行中执行，则返回现有执行记录
+    const planId = planContext.plan.id;
+    const concurrencyPolicy = (rawPlan?.schedule as any)?.concurrency as
+      | "allow"
+      | "forbid"
+      | undefined;
+
+    if (concurrencyPolicy === "forbid") {
+      // 优先返回已记录的运行中执行
+      for (const record of this.executions.values()) {
+        if (record.planId === planId && record.running) {
+          return record;
+        }
+      }
+    }
+
     await registerConfiguredAgents();
     getAgentPlugin("demand-analysis");
 
@@ -316,9 +367,29 @@ export class OrchestratorController extends EventEmitter {
     const useMockBridge = request.useMockBridge ?? this.options.defaultUseMockBridge ?? true;
     const executorType: ExecutionRecord["executorType"] = useMockBridge ? "mock" : "mcp";
 
+    // 提前创建 ExecutionRecord，允许后续并发请求立即感知到正在运行的执行
+    const initialRecord: ExecutionRecord = {
+      id: executionId,
+      planId,
+      createdAt: new Date().toISOString(),
+      executorType,
+      status: "pending",
+      bridgeStates: [],
+      pendingApprovals: [],
+      executionStatus: "idle",
+      running: false,
+      currentNodeId: null,
+      lastCompletedNodeId: null,
+      currentBridgeState: undefined,
+      bridgeMeta: undefined
+    };
+    this.executions.set(executionId, initialRecord);
+    this.emit("execution.created", { executionId, planId });
+    this.emitSnapshot(executionId);
+
     const logger = createLoggerFacade("orchestrator-service", {
       executionId,
-      planId: planContext.plan.id
+      planId
     });
     const { session, registry: sessionRegistry } = await createBridgeSession(
       this.options,
@@ -374,24 +445,10 @@ export class OrchestratorController extends EventEmitter {
     session.on("tool-stream", handleToolStream);
 
     const initialBridgeState = session.getState();
-    const record: ExecutionRecord = {
-      id: executionId,
-      planId: planContext.plan.id,
-      createdAt: new Date().toISOString(),
-      executorType,
-      status: "pending",
-      bridgeStates: initialBridgeState ? [initialBridgeState] : [],
-      pendingApprovals: [],
-      executionStatus: "idle",
-      running: false,
-      currentNodeId: null,
-      lastCompletedNodeId: null,
-      currentBridgeState: initialBridgeState,
-      bridgeMeta: undefined
-    };
-    this.executions.set(executionId, record);
-    this.emit("execution.created", { executionId, planId: planContext.plan.id });
-    this.emitSnapshot(executionId);
+    const record = this.executions.get(executionId)!;
+    record.bridgeStates = initialBridgeState ? [initialBridgeState] : [];
+    record.currentBridgeState = initialBridgeState;
+
     const adapters = createDefaultAdapters(session);
     const checkpointStore = new JsonCheckpointStore(resolveStorageDirectory(this.options.databasePath));
     const approvalController = new ApprovalController({
@@ -431,53 +488,57 @@ export class OrchestratorController extends EventEmitter {
       this.emit("runtime.error", { executionId, ...payload });
     });
 
-    record.status = "running";
-    record.startedAt = new Date().toISOString();
-    record.executionStatus = "running";
-    record.running = true;
-    this.emit("execution.started", { executionId, planId: planContext.plan.id });
-    this.emitSnapshot(executionId);
+    const startNow = async () => {
+      record.status = "running";
+      record.startedAt = new Date().toISOString();
+      record.executionStatus = "running";
+      record.running = true;
 
-    (async () => {
+      if (concurrencyPolicy === "forbid") {
+        this.activePlanExecutions.set(planId, executionId);
+      }
+
+      this.emit("execution.started", { executionId, planId });
+      this.emitSnapshot(executionId);
+
       try {
         const result = await runtime.start();
-        if (record.status !== "cancelled") {
-          record.status = result.status;
-          record.finishedAt = result.finishedAt.toISOString();
-          record.result = result;
-          record.executionStatus = result.status;
-          record.running = false;
-          this.emit("execution.completed", { executionId, result });
-          this.emitSnapshot(executionId);
-        }
+        record.status = result.status;
+        record.finishedAt = result.finishedAt.toISOString();
+        record.result = result;
+        record.executionStatus = result.status;
+        record.running = false;
+        this.emit("execution.completed", { executionId, result });
+        this.emitSnapshot(executionId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (record.status !== "cancelled") {
-          record.status = "failed";
-          record.finishedAt = new Date().toISOString();
-          record.error = { message };
-          record.executionStatus = "failed";
-          record.running = false;
-          this.emit("execution.failed", { executionId, error: message });
-          this.emitSnapshot(executionId);
-        }
+        record.status = "failed";
+        record.finishedAt = new Date().toISOString();
+        record.error = { message };
+        record.executionStatus = "failed";
+        record.running = false;
+        this.emit("execution.failed", { executionId, error: message });
+        this.emitSnapshot(executionId);
       } finally {
         session.off("tool-stream", handleToolStream);
         await session.disconnect?.();
         sessionRegistry?.close();
         this.executionRuntimes.delete(executionId);
+        if (concurrencyPolicy === "forbid") {
+          const current = this.activePlanExecutions.get(planId);
+          if (current === executionId) {
+            this.activePlanExecutions.delete(planId);
+          }
+        }
       }
-    })().catch((error) => {
-      session.off("tool-stream", handleToolStream);
-      const message = error instanceof Error ? error.message : String(error);
-      record.status = "failed";
-      record.finishedAt = new Date().toISOString();
-      record.error = { message };
-      record.executionStatus = "failed";
-      record.running = false;
-      this.emit("execution.failed", { executionId, error: message });
-      this.emitSnapshot(executionId);
-    });
+    };
+
+    // 使用 p-limit 控制并发
+    if (this.concurrencyLimit) {
+      this.concurrencyLimit(startNow).catch(() => {});
+    } else {
+      startNow();
+    }
 
     return record;
   }
@@ -583,10 +644,48 @@ export class OrchestratorController extends EventEmitter {
     return this.toolStreamStore.listSummariesByExecution(executionId);
   }
 
+  // 全局：按可选 executionId 过滤，支持 onlyErrors/分页由调用方处理
+  listAllToolStreamSummaries(options?: { executionId?: string }): ToolStreamSummary[] {
+    return this.toolStreamStore.listSummariesAll(options?.executionId);
+  }
+
   getToolStreamChunks(executionId: string, correlationId: string): ToolStreamChunk[] {
     return this.toolStreamStore
       .listChunks(correlationId)
       .filter((chunk) => chunk.executionId === executionId);
+  }
+
+  // 全局：直接依据 correlationId 取回全部 chunk
+  getAllToolStreamChunks(correlationId: string): ToolStreamChunk[] {
+    return this.toolStreamStore.listChunks(correlationId);
+  }
+
+  // 公开：允许外部（如 Agents/ChatKit 路由）写入全局工具流审计，不要求 executionId
+  appendGlobalToolStreamChunk(input: {
+    correlationId: string;
+    toolName: string;
+    message: string;
+    status?: string;
+    executionId?: string;
+    planId?: string;
+    nodeId?: string;
+    error?: string;
+    source?: string;
+    timestamp?: string;
+  }) {
+    const timestamp = input.timestamp ?? new Date().toISOString();
+    return this.toolStreamStore.appendChunk({
+      correlationId: input.correlationId,
+      toolName: input.toolName,
+      executionId: input.executionId,
+      planId: input.planId,
+      nodeId: input.nodeId,
+      status: input.status ?? "start",
+      message: input.message,
+      error: input.error,
+      source: input.source ?? "agent",
+      timestamp
+    });
   }
 
   replayToolStream(executionId: string, correlationId: string): number {

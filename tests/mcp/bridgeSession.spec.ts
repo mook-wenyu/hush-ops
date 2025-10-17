@@ -1,7 +1,9 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BridgeSession } from "../../src/mcp/bridge/session.js";
 import type { ToolInvocation } from "../../src/mcp/bridge/types.js";
+import { setLogEventPublisher } from "../../src/shared/logging/logger.js";
+import type { LogsAppendedPayload } from "../../src/shared/logging/events.js";
 
 class MockBridgeClient {
   state: "connected" | "disconnected" = "connected";
@@ -50,9 +52,18 @@ class MockBridgeClient {
 
 describe("BridgeSession", () => {
   let client: MockBridgeClient;
+  const capturedLogs: LogsAppendedPayload[] = [];
 
   beforeEach(() => {
     client = new MockBridgeClient();
+    capturedLogs.length = 0;
+    setLogEventPublisher((payload) => {
+      capturedLogs.push(payload);
+    });
+  });
+
+  afterEach(() => {
+    setLogEventPublisher(null);
   });
 
   it("invokes tool with security hooks", async () => {
@@ -102,5 +113,29 @@ describe("BridgeSession", () => {
     client.emit("bridge:message", { method: "ping" });
 
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("记录工具调用失败日志并包含上下文", async () => {
+    const session = new BridgeSession(client as unknown as any);
+    client.callTool = vi.fn(async () => {
+      throw new Error("工具执行失败");
+    });
+
+    const invocation: ToolInvocation = {
+      toolName: "filesystem.remove",
+      arguments: { path: "/tmp/demo" },
+      options: { nodeId: "n-1", riskLevel: "high", planId: "plan-1", executionId: "exec-1" }
+    };
+
+    await expect(session.invokeTool(invocation)).rejects.toThrow("工具执行失败");
+
+    const errorLog = capturedLogs.find((entry) => entry.message === "invoke tool failed");
+
+    expect(errorLog?.category).toBe("app");
+    expect(errorLog?.context).toMatchObject({
+      toolName: "filesystem.remove",
+      executionId: "exec-1",
+      planId: "plan-1"
+    });
   });
 });

@@ -1,10 +1,12 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
+import path, { resolve as resolvePath } from "node:path";
 
 import { Command, Flags } from "@oclif/core";
 
 import { runAutoExecution } from "../../runtime/autoExecute.js";
 import { createOrchestratorClient, resolveExecutionMode } from "../../support/orchestrator.js";
+import { joinConfigPath, joinStatePath } from "../../../shared/environment/pathResolver.js";
 
 type RunAutoFlags = {
   readonly plan?: string;
@@ -22,6 +24,10 @@ type PlanSource = {
   readonly path: string;
 };
 
+const DEFAULT_PLAN_PATH = joinConfigPath("plans", "demo-mixed.json");
+const LEGACY_PLAN_PATH = path.resolve("plans", "demo-mixed.json");
+const DEFAULT_STATE_PATH = joinStatePath();
+
 export default class RunAuto extends Command {
   static summary = "自动执行 Plan";
 
@@ -30,11 +36,11 @@ export default class RunAuto extends Command {
   static flags = {
     plan: Flags.string({
       description: "Plan JSON 文件路径",
-      default: "plans/demo-mixed.json"
+      default: DEFAULT_PLAN_PATH
     }),
-    database: Flags.string({ description: "状态存储目录，默认 state" }),
+    database: Flags.string({ description: `状态存储目录（默认 ${DEFAULT_STATE_PATH}）` }),
     "mock-mcp": Flags.boolean({ description: "使用内置 MCP mock", default: false }),
-    "mcp-server": Flags.string({ description: "MCP 服务器配置名称（来自 config/mcp.servers.json）" }),
+    "mcp-server": Flags.string({ description: "MCP 服务器配置名称（来自配置目录 .hush-ops/config/mcp.servers.json）" }),
     "base-url": Flags.string({ description: "Orchestrator Service 基础地址，设置后默认使用远程模式" }),
     remote: Flags.boolean({ description: "使用 Orchestrator Service 执行 Plan" }),
     local: Flags.boolean({ description: "强制使用本地 auto-exec" }),
@@ -60,8 +66,21 @@ export default class RunAuto extends Command {
   }
 
   private resolvePlanSource(flags: RunAutoFlags): PlanSource {
-    const planPath = resolvePath(flags.plan ?? "plans/demo-mixed.json");
+    const planPath = this.resolvePlanPath(flags.plan);
     return { type: "file", path: planPath };
+  }
+
+  private resolvePlanPath(input?: string): string {
+    if (input) {
+      return resolvePath(input);
+    }
+    if (existsSync(DEFAULT_PLAN_PATH)) {
+      return DEFAULT_PLAN_PATH;
+    }
+    if (existsSync(LEGACY_PLAN_PATH)) {
+      return LEGACY_PLAN_PATH;
+    }
+    return DEFAULT_PLAN_PATH;
   }
 
   private async runRemote(planSource: PlanSource, baseUrl: string, flags: RunAutoFlags): Promise<void> {

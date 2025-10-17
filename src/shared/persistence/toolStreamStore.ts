@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { gzipSync } from "node:zlib";
+
+import { getHushOpsStateDirectory } from "../environment/pathResolver.js";
 
 export interface ToolStreamChunkInput {
   readonly correlationId: string;
@@ -55,7 +58,7 @@ interface StoreDocument {
   correlations: Record<string, StoredCorrelation>;
 }
 
-const DEFAULT_DIRECTORY = resolve("state");
+const DEFAULT_DIRECTORY = getHushOpsStateDirectory();
 const STORE_FILENAME = "tool-streams.json";
 
 export class ToolStreamStore {
@@ -68,6 +71,7 @@ export class ToolStreamStore {
     mkdirSync(directory, { recursive: true });
     this.storePath = join(directory, STORE_FILENAME);
     this.memory = this.loadFromDisk();
+    this.archiveOldData();
   }
 
   appendChunk(input: ToolStreamChunkInput): ToolStreamChunk {
@@ -100,8 +104,12 @@ export class ToolStreamStore {
   }
 
   listSummariesByExecution(executionId: string): ToolStreamSummary[] {
-    return Object.values(this.memory.correlations)
-      .filter((entry) => entry.executionId === executionId)
+    return this.listSummariesAll(executionId);
+  }
+
+  listSummariesAll(executionId?: string): ToolStreamSummary[] {
+    const items = Object.values(this.memory.correlations)
+      .filter((entry) => (executionId ? entry.executionId === executionId : true))
       .map((entry) => ({
         correlationId: entry.correlationId,
         toolName: entry.toolName,
@@ -110,12 +118,13 @@ export class ToolStreamStore {
         nodeId: entry.nodeId,
         source: entry.source,
         chunkCount: entry.chunks.length,
-        latestSequence: entry.chunks.length > 0 ? entry.chunks[entry.chunks.length - 1]?.sequence ?? 0 : 0,
+        latestSequence:
+          entry.chunks.length > 0 ? entry.chunks[entry.chunks.length - 1]?.sequence ?? 0 : 0,
         updatedAt: entry.updatedAt,
         completed: entry.chunks.some((chunk) => chunk.status === "success" || chunk.status === "error"),
         hasError: entry.chunks.some((chunk) => chunk.status === "error" || Boolean(chunk.error))
-      }))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      }));
+    return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   clearByExecution(executionId: string): void {
@@ -178,9 +187,67 @@ export class ToolStreamStore {
 
   private persist(): void {
     writeFileSync(this.storePath, `${JSON.stringify({ ...this.memory, version: 1 })}\n`, "utf-8");
+    this.rotateIfNeeded();
+  }
+
+  private rotateIfNeeded(): void {
+    // 通过环境变量配置：TOOL_STREAM_STORE_MAX_BYTES（默认 50MB）、TOOL_STREAM_STORE_COMPRESS（1/0）
+    const maxBytes = Number(process.env.TOOL_STREAM_STORE_MAX_BYTES ?? 50 * 1024 * 1024);
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) return;
+    try {
+      const size = statSync(this.storePath).size;
+      if (size <= maxBytes) return;
+      const baseDir = dirname(this.storePath);
+      const archivesDir = join(baseDir, "archives");
+      mkdirSync(archivesDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const baseName = `tool-streams-${ts}.json`;
+      const compress = (process.env.TOOL_STREAM_STORE_COMPRESS ?? "1") === "1";
+      const target = compress ? join(archivesDir, baseName + ".gz") : join(archivesDir, baseName);
+      const payload = Buffer.from(JSON.stringify({ ...this.memory, version: 1 }));
+      const data = compress ? gzipSync(payload) : payload;
+      writeFileSync(target, data);
+      // 归档后清空内存与主文件，避免持续膨胀
+      (this.memory as StoreDocument).correlations = {};
+      this.persistEmpty();
+    } catch {
+      // 忽略滚动失败，避免影响主流程
+    }
   }
 
   private persistEmpty(): void {
-    writeFileSync(this.storePath, `${JSON.stringify({ version: 1, correlations: {} })}\n`, "utf-8");
+    writeFileSync(
+      this.storePath,
+      `${JSON.stringify({ version: 1, correlations: {} })}\n`,
+      "utf-8"
+    );
+  }
+
+  private archiveOldData(): void {
+    const ageThresholdDays = Number(process.env.TOOL_STREAM_ARCHIVE_DAYS ?? 30);
+    if (!Number.isFinite(ageThresholdDays) || ageThresholdDays <= 0) return;
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - ageThresholdDays);
+    const cutoffISO = cutoffDate.toISOString();
+
+    const toArchive: StoredCorrelation[] = [];
+    for (const [id, correlation] of Object.entries(this.memory.correlations)) {
+      if (correlation.updatedAt < cutoffISO) {
+        toArchive.push(correlation);
+        delete this.memory.correlations[id];
+      }
+    }
+
+    if (toArchive.length > 0) {
+      const baseDir = dirname(this.storePath);
+      const archivesDir = join(baseDir, "archives");
+      mkdirSync(archivesDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const archivePath = join(archivesDir, `tool-streams-aged-${ts}.json.gz`);
+      const compressed = gzipSync(JSON.stringify({ version: 1, correlations: toArchive }));
+      writeFileSync(archivePath, compressed);
+      this.persist();
+    }
   }
 }

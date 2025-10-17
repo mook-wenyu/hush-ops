@@ -1,0 +1,10 @@
+{
+  "id": "example-mcp-info",
+  "version": "v1",
+  "entry": "root",
+  "schedule": { "enabled": false, "kind": "cron", "cron": "0 * * * *", "concurrency": "allow" },
+  "nodes": [
+    { "id": "root", "type": "sequence", "children": ["info"] },
+    { "id": "info", "type": "mcp_tool", "server": "default", "toolName": "system.info", "arguments": {}, "requiresApproval": false }
+  ]
+}

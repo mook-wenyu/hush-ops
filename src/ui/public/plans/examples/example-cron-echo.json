@@ -1,0 +1,10 @@
+{
+  "id": "example-cron-echo",
+  "version": "v1",
+  "entry": "root",
+  "schedule": { "enabled": true, "kind": "cron", "cron": "*/10 * * * *", "concurrency": "allow" },
+  "nodes": [
+    { "id": "root", "type": "sequence", "children": ["echo"] },
+    { "id": "echo", "type": "local_task", "driver": "shell", "command": "echo", "args": ["hello from example-cron-echo"] }
+  ]
+}

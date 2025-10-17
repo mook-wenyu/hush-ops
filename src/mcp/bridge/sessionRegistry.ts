@@ -1,6 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { getHushOpsStateDirectory } from "../../shared/environment/pathResolver.js";
+
 export interface BridgeSessionRecord {
   serverName: string;
   userId: string;
@@ -22,7 +24,7 @@ interface JsonBridgeSessionRegistryOptions {
   defaultUserId?: string;
 }
 
-const DEFAULT_DIRECTORY = resolve("state");
+const DEFAULT_DIRECTORY = getHushOpsStateDirectory();
 const STORE_FILENAME = "mcp-sessions.json";
 
 interface StoreDocument {

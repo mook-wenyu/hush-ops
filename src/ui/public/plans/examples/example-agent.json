@@ -1,0 +1,10 @@
+{
+  "id": "example-agent-invocation",
+  "version": "v3.0.0",
+  "entry": "root",
+  "nodes": [
+    { "id": "root", "type": "sequence", "name": "Root" },
+    { "id": "ask", "type": "agent_invocation", "agentName": "default", "name": "Agent: default", "metadata": { "instructions": "你是内部助手，简洁回答。" } }
+  ],
+  "edges": [ { "id": "root->ask", "source": "root", "target": "ask" } ]
+}

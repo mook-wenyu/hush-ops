@@ -8,8 +8,10 @@ import type {
   LoadedAgentConfig,
   RegisterConfiguredAgentsOptions
 } from "./types.js";
+import { getHushOpsConfigDirectory } from "../../shared/environment/pathResolver.js";
 
-const DEFAULT_DIRECTORY = "agents-config";
+const DEFAULT_DIRECTORY = path.join(getHushOpsConfigDirectory(), "agents");
+const LEGACY_DIRECTORY = path.resolve(process.cwd(), "agents-config");
 
 interface InternalConfig extends LoadedAgentConfig {
   readonly moduleSpecifier: string;
@@ -19,7 +21,7 @@ function resolveDirectory(customDirectory?: string): string {
   if (customDirectory) {
     return path.resolve(customDirectory);
   }
-  return path.resolve(process.cwd(), DEFAULT_DIRECTORY);
+  return DEFAULT_DIRECTORY;
 }
 
 async function listConfigFiles(directory: string): Promise<string[]> {
@@ -95,8 +97,15 @@ async function parseConfigFile(filePath: string, directory: string): Promise<Int
 export async function loadAgentConfigs(
   options: RegisterConfiguredAgentsOptions = {}
 ): Promise<LoadedAgentConfig[]> {
-  const directory = resolveDirectory(options.directory);
-  const files = await listConfigFiles(directory);
+  let directory = resolveDirectory(options.directory);
+  let files = await listConfigFiles(directory);
+  if (files.length === 0 && !options.directory) {
+    const legacyFiles = await listConfigFiles(LEGACY_DIRECTORY);
+    if (legacyFiles.length > 0) {
+      directory = LEGACY_DIRECTORY;
+      files = legacyFiles;
+    }
+  }
   if (files.length === 0) {
     return [];
   }

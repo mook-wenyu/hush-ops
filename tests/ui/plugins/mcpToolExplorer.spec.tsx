@@ -166,4 +166,64 @@ describe("MCP 工具浏览器插件", () => {
     view.unmount();
     runtime.dispose();
   });
+
+  it("在重放失败时展示错误提示", async () => {
+    const mockListTools = vi.fn(async () => [
+      { name: "search_web", description: "搜索网页", riskLevel: "medium" as const }
+    ]);
+    const mockListHistory = vi.fn(async () => [
+      {
+        correlationId: "corr-fail",
+        toolName: "search_web",
+        executionId: "exec-fail",
+        planId: "plan-fail",
+        nodeId: "node-fail",
+        chunkCount: 1,
+        latestSequence: 0,
+        updatedAt: new Date().toISOString(),
+        completed: false,
+        hasError: false
+      }
+    ]);
+    const mockReplay = vi.fn(async () => {
+      throw new Error("重放服务不可用");
+    });
+
+    const runtime = createPluginRuntime({
+      descriptors: [],
+      bridge: {
+        listTools: mockListTools,
+        callTool: vi.fn(async () => ({})),
+        listToolStreamSummaries: mockListHistory,
+        fetchToolStreamChunks: vi.fn(async () => []),
+        replayToolStream: mockReplay
+      }
+    });
+    await runtime.initialise();
+    await registerToolExplorer(runtime, undefined as never);
+
+    const panel = runtime.listPanels().find((item) => item.id === "core:mcp-tool-explorer");
+    const view = render(panel!.render());
+
+    runtime.notifyBridgeOutput({
+      toolName: "search_web",
+      message: "实时输出",
+      timestamp: new Date().toISOString(),
+      status: "start",
+      executionId: "exec-fail"
+    });
+
+    const loadHistoryButton = await screen.findByRole("button", { name: "加载历史流" });
+    await waitFor(() => expect(loadHistoryButton).not.toBeDisabled());
+    fireEvent.click(loadHistoryButton);
+    await waitFor(() => expect(mockListHistory).toHaveBeenCalledWith("exec-fail"));
+
+    const replayButton = await screen.findByRole("button", { name: "重放" });
+    fireEvent.click(replayButton);
+
+    await screen.findByText("重放服务不可用");
+
+    view.unmount();
+    runtime.dispose();
+  });
 });

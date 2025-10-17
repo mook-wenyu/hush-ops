@@ -1,6 +1,7 @@
 import { Command, Flags } from "@oclif/core";
 
 import {
+  DEFAULT_AGENT_CONFIG_DIR,
   generateConfig,
   parseJsonOption,
   parseTags
@@ -9,7 +10,7 @@ import {
 export default class AgentConfigGenerate extends Command {
   static summary = "生成或预览智能体配置 JSON";
 
-  static description = "根据提供的参数生成 agents-config JSON，支持 dry-run 预览或写入文件";
+  static description = "根据提供的参数生成智能体配置 JSON，支持 dry-run 预览或写入 .hush-ops/config/agents/";
 
   static flags = {
     id: Flags.string({ description: "配置 ID", required: true }),
@@ -22,7 +23,7 @@ export default class AgentConfigGenerate extends Command {
     label: Flags.string({ description: "元数据标签" }),
     description: Flags.string({ description: "元数据描述" }),
     tags: Flags.string({ description: "逗号分隔标签" }),
-    directory: Flags.string({ description: "输出目录（默认 agents-config）" }),
+    directory: Flags.string({ description: `输出目录（默认 ${DEFAULT_AGENT_CONFIG_DIR}）` }),
     output: Flags.string({ description: "自定义输出文件" }),
     "config-version": Flags.string({ description: "配置版本", default: "v1" }),
     force: Flags.boolean({ description: "允许覆盖已存在文件" }),

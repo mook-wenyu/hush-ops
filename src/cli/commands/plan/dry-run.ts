@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
+import path, { resolve as resolvePath } from "node:path";
 
 import { Command, Flags } from "@oclif/core";
 
@@ -12,6 +13,7 @@ import { createDefaultAdapters } from "../../../orchestrator/adapters/defaults.j
 import { ApprovalController } from "../../../shared/approvals/controller.js";
 import { createMockBridgeSession } from "../../runtime/autoExecute.js";
 import { createOrchestratorClient, resolveExecutionMode } from "../../support/orchestrator.js";
+import { joinConfigPath } from "../../../shared/environment/pathResolver.js";
 
 type PlanDryRunFlags = {
   readonly plan?: string;
@@ -64,8 +66,23 @@ export default class PlanDryRun extends Command {
   }
 
   private resolvePlanSource(flags: PlanDryRunFlags): PlanSource {
-    const planPath = resolvePath(flags.plan ?? "plans/demo-mixed.json");
+    const planPath = this.resolvePlanPath(flags.plan);
     return { type: "file", path: planPath };
+  }
+
+  private resolvePlanPath(customPlan?: string): string {
+    if (customPlan) {
+      return resolvePath(customPlan);
+    }
+    const configuredPlan = joinConfigPath("plans", "demo-mixed.json");
+    if (existsSync(configuredPlan)) {
+      return configuredPlan;
+    }
+    const legacyPlan = path.resolve("plans", "demo-mixed.json");
+    if (existsSync(legacyPlan)) {
+      return legacyPlan;
+    }
+    return configuredPlan;
   }
 
   private async resolvePlanJson(planSource: PlanSource): Promise<unknown> {
@@ -112,12 +129,13 @@ export default class PlanDryRun extends Command {
       }
     }
 
+    const approvalController = new ApprovalController();
     const executionContext = createDefaultExecutionContext({
       planContext,
       adapters,
       checkpointStore,
       loggerCategory: "plan-dry-run",
-      approvalController: new ApprovalController(),
+      approvalController,
       initialSharedState
     });
 
@@ -135,6 +153,7 @@ export default class PlanDryRun extends Command {
     } catch (error) {
       this.error(`dry-run 执行失败：${(error as Error).message}`, { exit: 1 });
     } finally {
+      approvalController.close();
       await session.disconnect?.();
     }
   }

@@ -3,6 +3,7 @@ import type { ChangeEvent } from "react";
 
 import { usePluginCommands } from "../plugins/runtime";
 import type { PluginCommandDefinition } from "../plugins/runtime";
+import { cardClasses, cardBodyClasses, alertClasses } from "../utils/classNames";
 
 interface PlanActionsProps {
   planValue: string;
@@ -91,8 +92,8 @@ export function PlanActions({
   }, []);
 
   return (
-    <div className="card bg-base-300/70 shadow-xl">
-      <div className="card-body space-y-4">
+    <div className={cardClasses({ variant: 'nested' })}>
+      <div className={cardBodyClasses()}>
         <div>
           <h2 className="card-title text-lg">计划控制</h2>
           <p className="text-sm text-base-content/70">
@@ -122,7 +123,7 @@ export function PlanActions({
             </select>
           </label>
           {serverError && (
-            <div className="alert alert-warning text-xs">
+            <div className={alertClasses({ variant: 'warning', size: 'xs' })}>
               <span>{serverError}</span>
             </div>
           )}
@@ -170,34 +171,36 @@ export function PlanActions({
         </div>
 
         {pluginMessage && (
-          <div className="alert alert-info text-xs">
+          <div className={alertClasses({ variant: 'info', size: 'xs' })}>
             <span>{pluginMessage}</span>
           </div>
         )}
         {pluginError && (
-          <div className="alert alert-error text-xs">
+          <div className={alertClasses({ variant: 'error', size: 'xs' })}>
             <span>{pluginError}</span>
           </div>
         )}
 
         {message && (
-          <div className="alert alert-success text-sm">
+          <div className={alertClasses({ variant: 'success', size: 'sm' })}>
             <span>{message}</span>
           </div>
         )}
         {error && (
-          <div className="alert alert-error text-sm">
+          <div className={alertClasses({ variant: 'error', size: 'sm' })}>
             <span>{error}</span>
           </div>
         )}
         {warnings.length > 0 && (
-          <div className="alert alert-warning text-sm flex flex-col gap-2">
-            <strong>Dry-run 警告：</strong>
-            <ul className="list-disc list-inside space-y-1 text-xs">
-              {warnings.map((warning, index) => (
-                <li key={index}>{warning}</li>
-              ))}
-            </ul>
+          <div className={alertClasses({ variant: 'warning', size: 'sm' })}>
+            <div className="flex flex-col gap-2">
+              <strong>Dry-run 警告：</strong>
+              <ul className="list-disc list-inside space-y-1 text-xs">
+                {warnings.map((warning, index) => (
+                  <li key={index}>{warning}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         )}
       </div>

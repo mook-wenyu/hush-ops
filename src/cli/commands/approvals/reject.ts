@@ -5,6 +5,9 @@ import {
   createApprovalStore,
   recordApprovalDecision
 } from "../../approvals.js";
+import { joinStatePath } from "../../../shared/environment/pathResolver.js";
+
+const DEFAULT_APPROVAL_DIRECTORY = joinStatePath("approvals");
 
 export default class ApprovalsReject extends Command {
   static summary = "将待审批项标记为拒绝";
@@ -17,7 +20,7 @@ export default class ApprovalsReject extends Command {
 
   static flags = {
     database: Flags.string({
-      description: "指定审批存储目录（默认 state/approvals）"
+      description: `指定审批存储目录（默认 ${DEFAULT_APPROVAL_DIRECTORY}）`
     }),
     comment: Flags.string({
       description: "拒绝原因"
@@ -35,6 +38,7 @@ export default class ApprovalsReject extends Command {
     } catch (error) {
       this.error((error as Error).message, { exit: 1 });
     } finally {
+      controller.close();
       store.close();
     }
   }

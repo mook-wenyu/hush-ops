@@ -1,14 +1,14 @@
 import { Command, Flags } from "@oclif/core";
 
-import { listConfigs } from "../../../agent-config.js";
+import { DEFAULT_AGENT_CONFIG_DIR, listConfigs } from "../../../agent-config.js";
 
 export default class AgentConfigList extends Command {
-  static summary = "列出已注册的 agents-config";
+  static summary = "列出现有智能体配置";
 
-  static description = "扫描目录并输出已存在的智能体配置摘要";
+  static description = "扫描配置目录并输出已存在的智能体配置摘要";
 
   static flags = {
-    directory: Flags.string({ description: "配置目录（默认 agents-config）" })
+    directory: Flags.string({ description: `配置目录（默认 ${DEFAULT_AGENT_CONFIG_DIR}）` })
   } as const;
 
   async run(): Promise<void> {
@@ -17,7 +17,7 @@ export default class AgentConfigList extends Command {
     try {
       const lines = await listConfigs({ directory: flags.directory });
       if (lines.length === 0) {
-        this.log("未找到任何 agents-config 配置。");
+        this.log("未找到任何智能体配置。");
         return;
       }
       for (const line of lines) {

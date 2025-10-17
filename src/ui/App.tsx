@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, useDeferredValue } from "react";
+import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
+// 使用自定义样式替代库内置样式（避免构建导出不兼容）
 
 import { BridgeStatus } from "./components/BridgeStatus";
 import { ExecutionList } from "./components/ExecutionList";
 import { PendingApprovals } from "./components/PendingApprovals";
 import { PlanActions } from "./components/PlanActions";
 import { PlanNodeEditor } from "./components/PlanNodeEditor";
-import { PluginSidePanels } from "./components/PluginSidePanels";
+// P2: 插件侧栏惰性加载（仅在显式打开时挂载）
+const PluginSidePanelsLazy = lazy(() =>
+  import("./components/PluginSidePanels").then((m) => ({ default: m.PluginSidePanels }))
+);
 import {
   PlanCanvas,
   type PlanJson,
@@ -13,8 +18,8 @@ import {
   type PlanNodePositionUpdate
 } from "./components/graph/PlanCanvas";
 import { PluginRuntimeProvider, type PluginRuntime, type PluginToolStreamEvent } from "./plugins/runtime";
+import { isPluginsDisabled } from "./utils/plugins";
 import {
-  createWebSocket,
   dryRunPlan,
   executePlan,
   fetchExecutions,
@@ -28,11 +33,29 @@ import {
   replayExecutionToolStream,
   fetchMcpServers,
   type McpServerSummary
-} from "./services/orchestratorApi";
+} from "./services";
+import {
+  useBridgeConnection,
+  type BridgeTelemetryEvent,
+  type SequenceGapInfo
+} from "./hooks/useBridgeConnection";
+import {
+  appStore,
+  selectApprovalCommentDrafts,
+  selectApprovalProcessingIds,
+  selectExecutionsError,
+  selectExecutionsList,
+  selectExecutionsLoading,
+  selectPendingApprovalsList,
+  useAppStoreFeatureFlag,
+  useAppStoreSelector
+} from "./state/appStore";
 import type {
   BridgeState,
   ExecutionRecord,
+  ExecutionSnapshot,
   OrchestratorEventEnvelope,
+  PendingApprovalEntry,
   RuntimeToolStreamPayload
 } from "./types/orchestrator";
 import { updatePlanInputWithNodePositions } from "./utils/planTransforms";
@@ -67,12 +90,61 @@ function extractPending(entries: ExecutionRecord[]): ExecutionRecord["pendingApp
   return entries.flatMap((execution) => execution.pendingApprovals);
 }
 
+function normalizeErrorMessage(input: unknown, fallback: string): string {
+  if (!input) {
+    return fallback;
+  }
+  if (typeof input === "string") {
+    return input;
+  }
+  if (typeof input === "object") {
+    const candidate = input as { message?: unknown };
+    if (typeof candidate.message === "string") {
+      return candidate.message;
+    }
+  }
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return String(input);
+  }
+}
+
 export function App() {
+  // 挂载就绪标记：供 e2e/a11y 用例等待 React 完整挂载
+  useEffect(() => {
+    try { document.documentElement.setAttribute('data-app-mounted', '1'); } catch {}
+    return () => { try { document.documentElement.removeAttribute('data-app-mounted'); } catch {} };
+  }, []);
+
+
+  const storeEnabled = useAppStoreFeatureFlag();
+  const storeExecutions = useAppStoreSelector(selectExecutionsList);
+  const storeExecutionsLoading = useAppStoreSelector(selectExecutionsLoading);
+  const storeExecutionsError = useAppStoreSelector(selectExecutionsError);
+  const storePendingApprovals = useAppStoreSelector(selectPendingApprovalsList);
+  const storeApprovalCommentDrafts = useAppStoreSelector(selectApprovalCommentDrafts);
+  const storeProcessingIds = useAppStoreSelector(selectApprovalProcessingIds);
+  const storeBridgeState = useAppStoreSelector((state) => state.runtime.bridgeState);
+  const storeRuntimeSnapshot = useAppStoreSelector((state) => state.runtime.snapshot);
+  const storeMcpConfig = useAppStoreSelector((state) => state.mcpConfig);
+
+  const runStoreMutation = useCallback(
+    (mutator: () => void) => {
+      if (!storeEnabled) {
+        return;
+      }
+      startTransition(() => {
+        mutator();
+      });
+    },
+    [storeEnabled]
+  );
+
   const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
   const [bridgeState, setBridgeState] = useState<BridgeState>("connecting");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [socketSeed, setSocketSeed] = useState(0);
   const [planInput, setPlanInput] = useState("");
   const [planWarnings, setPlanWarnings] = useState<string[]>([]);
   const [planMessage, setPlanMessage] = useState<string | null>(null);
@@ -94,19 +166,22 @@ export function App() {
   });
   const [selectedPlanNodeId, setSelectedPlanNodeId] = useState<string | null>(null);
 
+  const effectiveSelectedServer =
+    storeEnabled && storeMcpConfig.selectedName !== null ? storeMcpConfig.selectedName : selectedServer;
+
   const mcpBridge = useMemo(
     () => ({
       listTools: async () => {
-        if (!selectedServer) {
+        if (!effectiveSelectedServer) {
           throw new Error("尚未选择 MCP 服务器，请先在计划控制中选择。");
         }
-        return fetchMcpTools(selectedServer);
+        return fetchMcpTools(effectiveSelectedServer);
       },
       callTool: async (toolName: string, input: unknown) => {
-        if (!selectedServer) {
+        if (!effectiveSelectedServer) {
           throw new Error("尚未选择 MCP 服务器，无法调用工具。");
         }
-        return callMcpTool(toolName, input, selectedServer);
+        return callMcpTool(toolName, input, effectiveSelectedServer);
       },
       requestApproval: (payload: Parameters<typeof requestApproval>[0]) => requestApproval(payload),
       listToolStreamSummaries: (executionId: string) => fetchExecutionToolStreamSummaries(executionId),
@@ -131,38 +206,207 @@ export function App() {
       replayToolStream: (executionId: string, correlationId: string) =>
         replayExecutionToolStream(executionId, correlationId)
     }),
-    [selectedServer]
+    [effectiveSelectedServer]
   );
 
-  const socketRef = useRef<WebSocket | null>(null);
+  const pluginRuntimeOptions = useMemo(
+    () => ({
+      availableEvents: ["runtime:state-change", "runtime.tool-stream"],
+      availableMcpTools: [] as readonly string[],
+      bridge: mcpBridge
+    }),
+    [mcpBridge]
+  );
+
   const refreshTimerRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pluginRuntimeRef = useRef<PluginRuntime | null>(null);
+  const selectedServerRef = useRef<string | null>(null);
+
+  const setExecutionsLoadingState = useCallback(
+    (value: boolean) => {
+      if (storeEnabled) {
+        appStore.getState().setExecutionsLoading(value);
+      }
+      setLoading(value);
+    },
+    [storeEnabled]
+  );
+
+  const setExecutionsErrorState = useCallback(
+    (message: string | null) => {
+      if (storeEnabled) {
+        appStore.getState().setExecutionsError(message);
+      }
+      setError(message);
+    },
+    [storeEnabled]
+  );
+
+  const applyExecutionsData = useCallback(
+    (records: ExecutionRecord[]) => {
+      if (storeEnabled) {
+        runStoreMutation(() => {
+          const api = appStore.getState();
+          api.hydrateExecutions(records);
+          const entries = extractPending(records);
+          api.upsertPendingApprovals(entries);
+          const stateAfterUpdate = appStore.getState();
+          const validIds = new Set(entries.map((entry) => entry.id));
+          Object.keys(stateAfterUpdate.approvals.pendingById).forEach((id) => {
+            if (!validIds.has(id)) {
+              stateAfterUpdate.removePendingApproval(id);
+            }
+          });
+        });
+      } else {
+        setExecutions(records);
+      }
+    },
+    [runStoreMutation, storeEnabled]
+  );
+
+  const applyBridgeState = useCallback(
+    (next: BridgeState) => {
+      if (storeEnabled) {
+        appStore.getState().setBridgeState(next);
+      }
+      setBridgeState(next);
+    },
+    [storeEnabled]
+  );
+
+  const setMcpStatusState = useCallback(
+    (status: "idle" | "loading" | "error") => {
+      if (storeEnabled) {
+        appStore.getState().setMcpStatus(status);
+      }
+    },
+    [storeEnabled]
+  );
+
+  const setMcpErrorState = useCallback(
+    (message: string | null) => {
+      if (storeEnabled) {
+        appStore.getState().setMcpError(message);
+      }
+      setMcpServerError(message);
+    },
+    [storeEnabled]
+  );
+
+  const applyMcpServers = useCallback(
+    (servers: McpServerSummary[]) => {
+      if (storeEnabled) {
+        appStore.getState().hydrateMcpServers(servers, Date.now());
+      }
+      setMcpServers(servers);
+    },
+    [storeEnabled]
+  );
+
+  const updateSelectedServer = useCallback(
+    (next: string | null) => {
+      if (storeEnabled) {
+        appStore.getState().selectMcpServer(next);
+      }
+      setSelectedServer(next);
+      selectedServerRef.current = next;
+    },
+    [storeEnabled]
+  );
+
+  const updateApprovalComment = useCallback(
+    (id: string, value: string) => {
+      if (storeEnabled) {
+        appStore.getState().setApprovalCommentDraft(id, value);
+      }
+      setApprovalComments((prev) => ({
+        ...prev,
+        [id]: value
+      }));
+    },
+    [storeEnabled]
+  );
+
+  const clearApprovalComment = useCallback(
+    (id: string) => {
+      if (storeEnabled) {
+        appStore.setState((state) => {
+          const nextDrafts = { ...state.approvals.commentDrafts };
+          delete nextDrafts[id];
+          return {
+            ...state,
+            approvals: {
+              ...state.approvals,
+              commentDrafts: nextDrafts
+            }
+          };
+        });
+      }
+      setApprovalComments((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    },
+    [storeEnabled]
+  );
+
+  const startApprovalProcessing = useCallback(
+    (id: string) => {
+      if (storeEnabled) {
+        const apiState = appStore.getState();
+        apiState.approvals.processingIds.forEach((existingId) => {
+          if (existingId !== id) {
+            apiState.setApprovalProcessing(existingId, false);
+          }
+        });
+        apiState.setApprovalProcessing(id, true);
+      }
+      setApprovalProcessing(id);
+    },
+    [storeEnabled]
+  );
+
+  const finishApprovalProcessing = useCallback(
+    (id?: string) => {
+      if (storeEnabled) {
+        const apiState = appStore.getState();
+        const targets = id ? [id] : apiState.approvals.processingIds;
+        targets.forEach((target) => {
+          apiState.setApprovalProcessing(target, false);
+        });
+      }
+      setApprovalProcessing(null);
+    },
+    [storeEnabled]
+  );
 
   const loadExecutions = useCallback(async () => {
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    setLoading(true);
+    setExecutionsLoadingState(true);
     try {
       const list = await fetchExecutions(controller.signal);
-      setExecutions(list);
-      setError(null);
+      applyExecutionsData(list);
+      setExecutionsErrorState(null);
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        setError((err as Error).message ?? "获取执行列表失败");
+        setExecutionsErrorState((err as Error).message ?? "获取执行列表失败");
       }
     } finally {
-      setLoading(false);
+      setExecutionsLoadingState(false);
     }
-  }, []);
+  }, [applyExecutionsData, setExecutionsErrorState, setExecutionsLoadingState]);
 
   useEffect(() => {
-    loadExecutions().catch((err) => setError((err as Error).message));
+    loadExecutions().catch((err) => setExecutionsErrorState((err as Error).message));
     return () => {
       abortControllerRef.current?.abort();
     };
-  }, [loadExecutions]);
+  }, [loadExecutions, setExecutionsErrorState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,160 +432,296 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    setMcpStatusState("loading");
     fetchMcpServers()
       .then((servers) => {
         if (cancelled) {
           return;
         }
-        setMcpServers(servers);
-        setMcpServerError(null);
-        setSelectedServer((current) => {
-          if (current && servers.some((server) => server.name === current)) {
-            return current;
-          }
-          return servers[0]?.name ?? null;
-        });
+        applyMcpServers(servers);
+        setMcpErrorState(null);
+        const preferred = storeEnabled ? appStore.getState().mcpConfig.selectedName : selectedServerRef.current;
+        const nextSelection =
+          preferred && servers.some((server) => server.name === preferred)
+            ? preferred
+            : servers[0]?.name ?? null;
+        updateSelectedServer(nextSelection);
+        setMcpStatusState("idle");
       })
       .catch((err) => {
         if (cancelled) {
           return;
         }
-        setMcpServers([]);
-        setSelectedServer(null);
-        setMcpServerError((err as Error).message ?? "获取 MCP 服务器配置失败");
+        applyMcpServers([]);
+        updateSelectedServer(null);
+        setMcpErrorState((err as Error).message ?? "获取 MCP 服务器配置失败");
+        setMcpStatusState("error");
       });
     return () => {
       cancelled = true;
     };
+  }, [applyMcpServers, setMcpErrorState, setMcpStatusState, storeEnabled, updateSelectedServer]);
+
+  const scheduleExecutionsRefresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      loadExecutions().catch((err) => setExecutionsErrorState((err as Error).message));
+    }, 250);
+  }, [loadExecutions, setExecutionsErrorState]);
+
+  const handleEnvelope = useCallback(
+    (envelope: OrchestratorEventEnvelope) => {
+      const { event, payload, executionId } = envelope;
+      const hasExecutionId = typeof executionId === "string" && executionId.length > 0;
+
+      if (event === "runtime.snapshot") {
+        if (storeEnabled) {
+          const snapshot = payload as ExecutionSnapshot | undefined;
+          if (snapshot) {
+            runStoreMutation(() => {
+              appStore.getState().applyExecutionSnapshot(snapshot);
+            });
+          }
+        } else {
+          scheduleExecutionsRefresh();
+        }
+        return;
+      }
+
+      if (event === "runtime.state-change") {
+        const statePayload = payload as {
+          bridgeState?: BridgeState;
+          planId?: string;
+          executionStatus?: string;
+          running?: boolean;
+          currentNodeId?: string | null;
+          lastCompletedNodeId?: string | null;
+          pendingApprovals?: Array<{ nodeId?: string | null }>;
+          bridgeMeta?: unknown;
+        };
+
+        setRuntimeSnapshot((prev) => {
+          const planId = typeof statePayload?.planId === "string" ? statePayload.planId : prev.planId;
+          const statusCandidate = typeof statePayload?.executionStatus === "string" ? statePayload.executionStatus : undefined;
+          const executionStatus = statusCandidate && isRuntimeExecutionStatus(statusCandidate)
+            ? statusCandidate
+            : prev.executionStatus;
+          const running = typeof statePayload?.running === "boolean" ? statePayload.running : prev.running;
+          const shouldReset = planId !== prev.planId || executionStatus === "idle" || executionStatus === "pending";
+          const completed = shouldReset ? new Set<string>() : new Set(prev.completedNodeIds);
+          if (statePayload?.lastCompletedNodeId) {
+            completed.add(statePayload.lastCompletedNodeId);
+          }
+          const pending = new Set<string>();
+          if (Array.isArray(statePayload?.pendingApprovals)) {
+            statePayload.pendingApprovals.forEach((entry) => {
+              if (entry?.nodeId) {
+                pending.add(entry.nodeId);
+              }
+            });
+          }
+          const nextSnapshot = {
+            planId: planId ?? null,
+            executionStatus,
+            running,
+            currentNodeId: statePayload?.currentNodeId ?? null,
+            completedNodeIds: completed,
+            pendingNodeIds: pending
+          };
+          if (storeEnabled) {
+            runStoreMutation(() => {
+              appStore.getState().applyRuntimeSnapshot({
+                planId: nextSnapshot.planId,
+                executionStatus: nextSnapshot.executionStatus,
+                running: nextSnapshot.running,
+                currentNodeId: nextSnapshot.currentNodeId,
+                completedNodeIds: Array.from(nextSnapshot.completedNodeIds),
+                pendingNodeIds: Array.from(nextSnapshot.pendingNodeIds)
+              });
+            });
+          }
+          return nextSnapshot;
+        });
+
+        if (statePayload?.bridgeState) {
+          applyBridgeState(statePayload.bridgeState);
+        }
+        return;
+      }
+
+      if (event === "runtime.tool-stream") {
+        const toolPayload = payload as RuntimeToolStreamPayload | undefined;
+        const messageValue =
+          typeof toolPayload?.message === "string"
+            ? toolPayload.message
+            : typeof toolPayload?.error === "string"
+              ? toolPayload.error
+              : "";
+        const toolEvent: PluginToolStreamEvent = {
+          toolName: typeof toolPayload?.toolName === "string" ? toolPayload.toolName : "unknown",
+          message: messageValue,
+          timestamp: typeof toolPayload?.timestamp === "string" ? toolPayload.timestamp : envelope.timestamp,
+          executionId:
+            typeof toolPayload?.executionId === "string"
+              ? toolPayload.executionId
+              : hasExecutionId
+                ? executionId
+                : undefined,
+          status: toolPayload?.status,
+          correlationId: typeof toolPayload?.correlationId === "string" ? toolPayload.correlationId : undefined,
+          nodeId: typeof toolPayload?.nodeId === "string" ? toolPayload.nodeId : undefined,
+          planId: typeof toolPayload?.planId === "string" ? toolPayload.planId : undefined,
+          result: toolPayload?.result,
+          error: typeof toolPayload?.error === "string" ? toolPayload.error : undefined,
+          sequence: typeof toolPayload?.sequence === "number" ? toolPayload.sequence : undefined,
+          storedAt: typeof toolPayload?.storedAt === "string" ? toolPayload.storedAt : undefined,
+          replayed: Boolean(toolPayload?.replayed),
+          source: typeof toolPayload?.source === "string" ? toolPayload.source : "live"
+        };
+        pluginRuntimeRef.current?.notifyBridgeOutput(toolEvent);
+        return;
+      }
+
+      if (event === "bridge.state-change") {
+        const bridgePayload = payload as { state?: BridgeState } | undefined;
+        if (bridgePayload?.state) {
+          applyBridgeState(bridgePayload.state);
+        }
+        return;
+      }
+
+      if (storeEnabled && hasExecutionId && event === "execution.started") {
+        runStoreMutation(() => {
+          appStore.getState().applyExecutionPatch(executionId, {
+            status: "running",
+            executionStatus: "running",
+            running: true
+          });
+        });
+        return;
+      }
+
+      if (storeEnabled && hasExecutionId && event === "execution.completed") {
+        const resultPayload = payload as {
+          status?: "success" | "failed" | "cancelled";
+          startedAt?: string;
+          finishedAt?: string;
+          error?: unknown;
+          outputs?: unknown;
+        };
+        if (resultPayload) {
+          runStoreMutation(() => {
+            appStore.getState().applyExecutionPatch(executionId, {
+              status: resultPayload.status ?? "success",
+              executionStatus: resultPayload.status ?? "success",
+              running: false,
+              startedAt: resultPayload.startedAt,
+              finishedAt: resultPayload.finishedAt,
+              result: resultPayload.outputs,
+              error: resultPayload.error
+                ? { message: normalizeErrorMessage(resultPayload.error, "执行失败") }
+                : undefined,
+              pendingApprovals: []
+            });
+          });
+        }
+        return;
+      }
+
+      if (storeEnabled && hasExecutionId && event === "execution.cancelled") {
+        runStoreMutation(() => {
+          appStore.getState().applyExecutionPatch(executionId, {
+            status: "cancelled",
+            executionStatus: "cancelled",
+            running: false,
+            pendingApprovals: []
+          });
+        });
+        return;
+      }
+
+      if (storeEnabled && hasExecutionId && event === "execution.failed") {
+        const failedPayload = payload as { message?: string } | undefined;
+        runStoreMutation(() => {
+          appStore.getState().applyExecutionPatch(executionId, {
+            status: "failed",
+            executionStatus: "failed",
+            running: false,
+            error: {
+              message: normalizeErrorMessage(failedPayload?.message, "执行失败")
+            },
+            pendingApprovals: []
+          });
+        });
+        return;
+      }
+
+      if (storeEnabled && hasExecutionId && event === "approval.pending") {
+        const entry = payload as PendingApprovalEntry | undefined;
+        if (entry) {
+          runStoreMutation(() => {
+            const currentState = appStore.getState();
+            const existingEntries = Object.entries(currentState.approvals.executionIndex)
+              .filter(([, value]) => value === executionId)
+              .map(([id]) => currentState.approvals.pendingById[id])
+              .filter((value): value is PendingApprovalEntry => Boolean(value));
+            const mergedEntries = [
+              ...existingEntries.filter((item) => item.id !== entry.id),
+              entry
+            ];
+            currentState.syncPendingApprovalsForExecution(executionId, mergedEntries);
+          });
+        }
+        return;
+      }
+
+      if (storeEnabled && event === "approval.updated") {
+        const updatedEntry = payload as { id?: string } | undefined;
+        if (typeof updatedEntry?.id === "string") {
+          runStoreMutation(() => {
+            appStore.getState().removePendingApproval(updatedEntry.id as string);
+          });
+        }
+        return;
+      }
+
+      if (
+        !storeEnabled &&
+        (event?.startsWith("execution.") ||
+          event === "approval.pending" ||
+          event === "approval.updated")
+      ) {
+        scheduleExecutionsRefresh();
+      }
+    },
+    [applyBridgeState, runStoreMutation, scheduleExecutionsRefresh, setRuntimeSnapshot, storeEnabled]
+  );
+
+  const handleSequenceGap = useCallback(
+    (info: SequenceGapInfo) => {
+      console.warn("检测到事件序列缺口，已触发回退轮询", info);
+      setExecutionsErrorState("检测到桥接事件序列缺口，已触发回退轮询。");
+    },
+    [setExecutionsErrorState]
+  );
+
+  const handleFallbackPoll = useCallback(() => loadExecutions(), [loadExecutions]);
+
+  const handleBridgeTelemetry = useCallback((event: BridgeTelemetryEvent) => {
+    console.debug("[bridge-telemetry]", event);
   }, []);
 
-  useEffect(() => {
-    const socket = createWebSocket(TOPICS);
-    socketRef.current = socket;
-    setBridgeState("connecting");
-
-    const handleOpen = () => setBridgeState("connected");
-    const handleClose = () => setBridgeState((prev) => (prev === "connecting" ? "connecting" : "disconnected"));
-    const handleError = () => setBridgeState("disconnected");
-    const handleMessage = (event: MessageEvent<string>) => {
-      try {
-        const envelope = JSON.parse(event.data) as OrchestratorEventEnvelope;
-        if (envelope.event === "runtime.state-change") {
-          const payload = envelope.payload as {
-            bridgeState?: BridgeState;
-            planId?: string;
-            executionStatus?: string;
-            running?: boolean;
-            currentNodeId?: string | null;
-            lastCompletedNodeId?: string | null;
-            pendingApprovals?: Array<{ nodeId?: string | null }>;
-          };
-
-          setRuntimeSnapshot((prev) => {
-            const planId = typeof payload?.planId === "string" ? payload.planId : prev.planId;
-            const statusCandidate = typeof payload?.executionStatus === "string" ? payload.executionStatus : undefined;
-            const executionStatus = statusCandidate && isRuntimeExecutionStatus(statusCandidate)
-              ? statusCandidate
-              : prev.executionStatus;
-            const running = typeof payload?.running === "boolean" ? payload.running : prev.running;
-            const shouldReset = planId !== prev.planId || executionStatus === "idle" || executionStatus === "pending";
-            const completed = shouldReset ? new Set<string>() : new Set(prev.completedNodeIds);
-            if (payload?.lastCompletedNodeId) {
-              completed.add(payload.lastCompletedNodeId);
-            }
-            const pending = new Set<string>();
-            if (Array.isArray(payload?.pendingApprovals)) {
-              payload.pendingApprovals.forEach((entry) => {
-                if (entry?.nodeId) {
-                  pending.add(entry.nodeId);
-                }
-              });
-            }
-            return {
-              planId: planId ?? null,
-              executionStatus,
-              running,
-              currentNodeId: payload?.currentNodeId ?? null,
-              completedNodeIds: completed,
-              pendingNodeIds: pending
-            };
-          });
-
-          if (payload?.bridgeState) {
-            setBridgeState(payload.bridgeState);
-          }
-          return;
-        }
-        if (envelope.event === "runtime.tool-stream") {
-          const payload = envelope.payload as RuntimeToolStreamPayload | undefined;
-          const messageValue =
-            typeof payload?.message === "string"
-              ? payload.message
-              : typeof payload?.error === "string"
-                ? payload.error
-                : "";
-          const toolEvent: PluginToolStreamEvent = {
-            toolName: typeof payload?.toolName === "string" ? payload.toolName : "unknown",
-            message: messageValue,
-            timestamp: typeof payload?.timestamp === "string" ? payload.timestamp : envelope.timestamp,
-            executionId:
-              typeof payload?.executionId === "string"
-                ? payload.executionId
-                : typeof envelope.executionId === "string"
-                  ? envelope.executionId
-                  : undefined,
-            status: payload?.status,
-            correlationId: typeof payload?.correlationId === "string" ? payload.correlationId : undefined,
-            nodeId: typeof payload?.nodeId === "string" ? payload.nodeId : undefined,
-            planId: typeof payload?.planId === "string" ? payload.planId : undefined,
-            result: payload?.result,
-            error: typeof payload?.error === "string" ? payload.error : undefined,
-            sequence: typeof payload?.sequence === "number" ? payload.sequence : undefined,
-            storedAt: typeof payload?.storedAt === "string" ? payload.storedAt : undefined,
-            replayed: Boolean(payload?.replayed),
-            source: typeof payload?.source === "string" ? payload.source : "live"
-          };
-          pluginRuntimeRef.current?.notifyBridgeOutput(toolEvent);
-          return;
-        }
-        if (envelope.event === "bridge.state-change") {
-          const payload = envelope.payload as { state?: BridgeState };
-          if (payload?.state) {
-            setBridgeState(payload.state);
-          }
-          return;
-        }
-        if (
-          envelope.event?.startsWith("execution.") ||
-          envelope.event === "approval.pending" ||
-          envelope.event === "approval.updated"
-        ) {
-          if (refreshTimerRef.current !== null) {
-            window.clearTimeout(refreshTimerRef.current);
-          }
-          refreshTimerRef.current = window.setTimeout(() => {
-            loadExecutions().catch((err) => setError((err as Error).message));
-          }, 250);
-        }
-      } catch (err) {
-        console.error("解析事件失败", err);
-      }
-    };
-
-    socket.addEventListener("open", handleOpen);
-    socket.addEventListener("close", handleClose);
-    socket.addEventListener("error", handleError);
-    socket.addEventListener("message", handleMessage);
-
-    return () => {
-      socket.removeEventListener("open", handleOpen);
-      socket.removeEventListener("close", handleClose);
-      socket.removeEventListener("error", handleError);
-      socket.removeEventListener("message", handleMessage);
-      socket.close();
-      socketRef.current = null;
-    };
-  }, [loadExecutions, socketSeed]);
+  const { reconnect: reconnectBridge } = useBridgeConnection({
+    topics: TOPICS,
+    storeEnabled,
+    onEvent: handleEnvelope,
+    onSequenceGap: handleSequenceGap,
+    onFallbackPoll: handleFallbackPoll,
+    onConnectionStateChange: applyBridgeState,
+    telemetry: handleBridgeTelemetry
+  });
 
   useEffect(() => {
     return () => {
@@ -351,18 +731,25 @@ export function App() {
     };
   }, []);
 
-  const pendingApprovals = useMemo(() => extractPending(executions), [executions]);
+  const legacyPendingApprovals = useMemo(() => extractPending(executions), [executions]);
+  const effectiveExecutions = storeEnabled ? storeExecutions : executions;
+  const effectivePendingApprovals = storeEnabled ? storePendingApprovals : legacyPendingApprovals;
   const pendingNodeIdsFromExecutions = useMemo(() => {
     const nodes = new Set<string>();
-    pendingApprovals.forEach((entry) => nodes.add(entry.nodeId));
+    effectivePendingApprovals.forEach((entry) => {
+      if (entry.nodeId) {
+        nodes.add(entry.nodeId);
+      }
+    });
     return nodes;
-  }, [pendingApprovals]);
+  }, [effectivePendingApprovals]);
+  const deferredPlanInput = useDeferredValue(planInput);
   const parsedPlan = useMemo<PlanJson | null>(() => {
-    if (!planInput.trim()) {
+    if (!deferredPlanInput.trim()) {
       return null;
     }
     try {
-      const candidate = JSON.parse(planInput) as PlanJson;
+      const candidate = JSON.parse(deferredPlanInput) as PlanJson;
       if (!candidate || typeof candidate !== "object") {
         return null;
       }
@@ -370,7 +757,7 @@ export function App() {
     } catch {
       return null;
     }
-  }, [planInput]);
+  }, [deferredPlanInput]);
 
   const parsedPlanId = parsedPlan?.id ?? null;
 
@@ -383,11 +770,31 @@ export function App() {
       setSelectedPlanNodeId(null);
     }
   }, [parsedPlan, selectedPlanNodeId]);
-  const runtimePlanId = runtimeSnapshot.planId;
-  const runtimeCurrentNodeId = runtimeSnapshot.currentNodeId;
-  const runtimeCompletedNodeIds = runtimeSnapshot.completedNodeIds;
-  const runtimePendingNodeIds = runtimeSnapshot.pendingNodeIds;
-  const runtimeExecutionStatus = runtimeSnapshot.executionStatus;
+  const runtimeSnapshotSource = storeEnabled
+    ? {
+        planId: storeRuntimeSnapshot.planId,
+        executionStatus: storeRuntimeSnapshot.executionStatus as RuntimeExecutionStatus,
+        running: storeRuntimeSnapshot.running,
+        currentNodeId: storeRuntimeSnapshot.currentNodeId,
+        completedNodeIds: new Set(storeRuntimeSnapshot.completedNodeIds),
+        pendingNodeIds: new Set(storeRuntimeSnapshot.pendingNodeIds)
+      }
+    : runtimeSnapshot;
+  const runtimePlanId = runtimeSnapshotSource.planId;
+  const runtimeCurrentNodeId = runtimeSnapshotSource.currentNodeId;
+  const runtimeCompletedNodeIds = runtimeSnapshotSource.completedNodeIds;
+  const runtimePendingNodeIds = runtimeSnapshotSource.pendingNodeIds;
+  const runtimeExecutionStatus = runtimeSnapshotSource.executionStatus;
+  const effectiveBridgeState = storeEnabled ? storeBridgeState : bridgeState;
+  const actionsDisabled = effectiveBridgeState !== "connected";
+  const effectiveLoading = storeEnabled ? storeExecutionsLoading : loading;
+  const effectiveError = storeEnabled && storeExecutionsError ? storeExecutionsError : error;
+  const effectiveCommentMap =
+    storeEnabled && Object.keys(storeApprovalCommentDrafts).length > 0 ? storeApprovalCommentDrafts : approvalComments;
+  const effectiveProcessingId =
+    storeEnabled && storeProcessingIds.length > 0 ? storeProcessingIds[0] ?? null : approvalProcessing;
+  const effectiveServers = storeEnabled ? storeMcpConfig.servers : mcpServers;
+  const effectiveMcpError = storeEnabled && storeMcpConfig.error ? storeMcpConfig.error : mcpServerError;
   const matchingRuntimePlan =
     parsedPlanId !== null && runtimePlanId !== null && runtimePlanId === parsedPlanId;
 
@@ -399,29 +806,29 @@ export function App() {
     return nodes;
   }, [pendingNodeIdsFromExecutions, runtimePendingNodeIds, matchingRuntimePlan]);
 
-  const actionsDisabled = bridgeState !== "connected";
-
   const handleReconnect = useCallback(() => {
-    setSocketSeed((seed) => seed + 1);
-  }, []);
+    reconnectBridge();
+  }, [reconnectBridge]);
 
   const handleRefreshClick = useCallback(() => {
-    loadExecutions().catch((err) => setError((err as Error).message));
-  }, [loadExecutions]);
+    loadExecutions().catch((err) => setExecutionsErrorState((err as Error).message));
+  }, [loadExecutions, setExecutionsErrorState]);
 
   const handleStopExecution = useCallback(
     async (executionId: string) => {
       setStopProcessingId(executionId);
       try {
         await stopExecution(executionId);
-        await loadExecutions();
+        if (!storeEnabled) {
+          await loadExecutions();
+        }
       } catch (err) {
-        setError((err as Error).message ?? "停止执行失败");
+        setExecutionsErrorState((err as Error).message ?? "停止执行失败");
       } finally {
         setStopProcessingId(null);
       }
     },
-    [loadExecutions]
+    [loadExecutions, setExecutionsErrorState, storeEnabled]
   );
 
   const handlePlanChange = useCallback((value: string) => {
@@ -524,7 +931,7 @@ export function App() {
       setPlanWarnings([]);
       return;
     }
-    if (!selectedServer) {
+    if (!effectiveSelectedServer) {
       setPlanError("未检测到可用的 MCP 服务器，请先选择配置后再执行。");
       setPlanWarnings([]);
       setPlanMessage(null);
@@ -532,41 +939,55 @@ export function App() {
     }
     setPlanBusy(true);
     try {
-      const result = await executePlan(parsed, selectedServer);
+      const result = await executePlan(parsed, effectiveSelectedServer);
       setPlanMessage(`已提交执行：${result.planId}（状态 ${result.status}）`);
       setPlanError(null);
       setPlanWarnings([]);
-      await loadExecutions();
+      if (!storeEnabled) {
+        await loadExecutions();
+      }
     } catch (err) {
       setPlanError((err as Error).message ?? "执行计划失败");
       setPlanMessage(null);
     } finally {
       setPlanBusy(false);
     }
-  }, [planInput, loadExecutions, selectedServer]);
+  }, [effectiveSelectedServer, loadExecutions, planInput, storeEnabled]);
 
-  const handleApprovalCommentChange = useCallback((id: string, value: string) => {
-    setApprovalComments((prev) => ({ ...prev, [id]: value }));
-  }, []);
+  const handleApprovalCommentChange = useCallback(
+    (id: string, value: string) => {
+      updateApprovalComment(id, value);
+    },
+    [updateApprovalComment]
+  );
 
   const handleApprovalDecision = useCallback(
     async (id: string, decision: "approved" | "rejected") => {
-      setApprovalProcessing(id);
+      startApprovalProcessing(id);
       try {
-        await submitApprovalDecision(id, decision, approvalComments[id]);
-        setApprovalComments((prev) => {
-          const next = { ...prev };
-          delete next[id];
-          return next;
-        });
-        await loadExecutions();
+        const comment = storeEnabled
+          ? appStore.getState().approvals.commentDrafts[id] ?? ""
+          : approvalComments[id] ?? "";
+        await submitApprovalDecision(id, decision, comment);
+        clearApprovalComment(id);
+        if (!storeEnabled) {
+          await loadExecutions();
+        }
       } catch (err) {
-        setError((err as Error).message ?? "审批操作失败");
+        setExecutionsErrorState((err as Error).message ?? "审批操作失败");
       } finally {
-        setApprovalProcessing(null);
+        finishApprovalProcessing(id);
       }
     },
-    [approvalComments, loadExecutions]
+    [
+      approvalComments,
+      clearApprovalComment,
+      finishApprovalProcessing,
+      loadExecutions,
+      setExecutionsErrorState,
+      startApprovalProcessing,
+      storeEnabled
+    ]
   );
 
   const handleStopClick = useCallback(
@@ -593,43 +1014,55 @@ export function App() {
     setSelectedPlanNodeId(nodeId);
   }, []);
 
-  return (
-    <PluginRuntimeProvider
-      options={{
-        availableEvents: ["runtime:state-change", "runtime.tool-stream"],
-        availableMcpTools: [],
-        bridge: mcpBridge
-      }}
-      onRuntimeReady={(runtime) => {
-        pluginRuntimeRef.current = runtime;
-      }}
-    >
-      <div className="container mx-auto flex flex-col gap-6 p-6">
-        <div className="card bg-base-300/70 shadow-xl">
-          <div className="card-body space-y-2">
-            <h1 className="card-title text-2xl font-semibold">hush-ops 控制面板</h1>
-            <p className="text-sm text-base-content/70">
-              实时监控混合编排执行状态，断线时自动进入只读模式。
-            </p>
-            {error && (
-              <div className="alert alert-error text-sm">
-                <span>错误：{error}</span>
-              </div>
-            )}
-          </div>
-        </div>
+  const pluginsDisabled = isPluginsDisabled();
+  const [pluginPanelsOpen, setPluginPanelsOpen] = useState(false);
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)]">
-          <section className="space-y-6">
+  const mainLayout = (
+    <div className="container mx-auto flex flex-col gap-4 p-4 lg:p-6">
+      <div className="card bg-base-300/70 shadow-xl">
+        <div className="card-body space-y-2">
+          <h1 className="card-title text-2xl font-semibold">hush-ops 控制面板</h1>
+          <p className="text-sm text-base-content/70">
+            实时监控混合编排执行状态，断线时自动进入只读模式。
+          </p>
+          {effectiveError && (
+            <div className="alert alert-error text-sm">
+              <span>错误：{effectiveError}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 三分栏：左(执行列表) / 中(计划编辑+画布) / 右(审批+状态) */}
+      <PanelGroup direction="horizontal" className="min-h-[60vh] rounded-lg border border-base-300/50 bg-base-100/60">
+        {/* 左：执行列表 */}
+        <Panel defaultSize={20} minSize={16} order={1} className="p-3 overflow-auto">
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold opacity-70">执行记录</h2>
+            <ExecutionList
+              executions={effectiveExecutions}
+              loading={effectiveLoading}
+              onRefresh={handleRefreshClick}
+              onStop={actionsDisabled ? undefined : handleStopClick}
+              disabled={actionsDisabled}
+              stopProcessingId={stopProcessingId}
+            />
+          </div>
+        </Panel>
+        <PanelResizeHandle className="w-2 bg-base-300/60 hover:bg-base-300 transition-colors cursor-col-resize" aria-label="调整执行列表宽度" />
+
+        {/* 中：计划编辑+画布 */}
+        <Panel defaultSize={60} minSize={30} order={2} className="p-3 overflow-auto">
+          <div className="space-y-4">
             <PlanActions
               planValue={planInput}
               onPlanChange={handlePlanChange}
               onDryRun={handleDryRun}
               onExecute={handleExecute}
-              serverOptions={mcpServers}
-              selectedServer={selectedServer}
-              onServerChange={setSelectedServer}
-              serverError={mcpServerError}
+              serverOptions={effectiveServers}
+              selectedServer={effectiveSelectedServer}
+              onServerChange={updateSelectedServer}
+              serverError={effectiveMcpError}
               warnings={planWarnings}
               message={planMessage}
               busy={planBusy}
@@ -644,7 +1077,7 @@ export function App() {
             />
             <PlanCanvas
               plan={parsedPlan}
-              bridgeState={bridgeState}
+              bridgeState={effectiveBridgeState}
               pendingNodeIds={planCanvasPendingNodeIds}
               currentNodeId={matchingRuntimePlan ? runtimeCurrentNodeId : null}
               completedNodeIds={matchingRuntimePlan ? runtimeCompletedNodeIds : undefined}
@@ -653,32 +1086,66 @@ export function App() {
               onSelectNode={setSelectedPlanNodeId}
               onUpdateNodePositions={handleUpdatePlanNodePositions}
             />
-          </section>
+          </div>
+        </Panel>
+        <PanelResizeHandle className="w-2 bg-base-300/60 hover:bg-base-300 transition-colors cursor-col-resize" aria-label="调整计划画布宽度" />
 
-          <aside className="space-y-6">
-            <BridgeStatus state={bridgeState} onReconnect={handleReconnect} reconnectDisabled={bridgeState === "connecting"} />
+        {/* 右：审批 + 连接状态 + 插件侧栏 */}
+        <Panel defaultSize={20} minSize={16} order={3} className="p-3 overflow-auto">
+          <div className="space-y-3">
+            {effectiveBridgeState !== "connected" && (
+              <BridgeStatus
+                state={effectiveBridgeState}
+                onReconnect={handleReconnect}
+                reconnectDisabled={effectiveBridgeState === "connecting"}
+              />
+            )}
+            <h2 className="text-sm font-semibold opacity-70">待审批</h2>
             <PendingApprovals
-              entries={pendingApprovals}
+              entries={effectivePendingApprovals}
               disabled={actionsDisabled}
-              commentMap={approvalComments}
+              commentMap={effectiveCommentMap}
               onCommentChange={handleApprovalCommentChange}
               onApprove={handleApprove}
               onReject={handleReject}
-              processingId={approvalProcessing}
+              processingId={effectiveProcessingId}
               onFocusNode={handleFocusApprovalNode}
             />
-            <ExecutionList
-              executions={executions}
-              loading={loading}
-              onRefresh={handleRefreshClick}
-              onStop={actionsDisabled ? undefined : handleStopClick}
-              disabled={actionsDisabled}
-              stopProcessingId={stopProcessingId}
-            />
-            <PluginSidePanels />
-          </aside>
-        </div>
-      </div>
+
+            {!pluginsDisabled && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  data-testid="toggle-plugin-panels"
+                  onClick={() => setPluginPanelsOpen((v) => !v)}
+                  aria-expanded={pluginPanelsOpen}
+                >
+                  {pluginPanelsOpen ? "关闭插件面板" : "打开插件面板"}
+                </button>
+                {pluginPanelsOpen && (
+                  <div data-testid="plugin-panels-host">
+                    <Suspense fallback={null}>
+                      <PluginSidePanelsLazy />
+                    </Suspense>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </Panel>
+      </PanelGroup>
+    </div>
+  );
+
+  return (
+    <PluginRuntimeProvider
+      options={pluginRuntimeOptions}
+      onRuntimeReady={(runtime) => {
+        pluginRuntimeRef.current = runtime;
+      }}
+    >
+      {mainLayout}
     </PluginRuntimeProvider>
   );
 }

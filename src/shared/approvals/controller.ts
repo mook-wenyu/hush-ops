@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import chokidar, { type FSWatcher } from "chokidar";
 
 import type { PlanNode } from "../../orchestrator/plan/index.js";
 import { ApprovalStore } from "./store.js";
@@ -16,6 +17,7 @@ export interface ApprovalControllerOptions {
   requestedBy?: string;
   decidedBy?: string;
   onPending?: (entry: PendingApprovalEntry) => Promise<void> | void;
+  useFileWatch?: boolean;  // 是否启用文件监听（默认 true）
 }
 
 export interface ManualApprovalRequest {
@@ -42,6 +44,12 @@ export class ApprovalController {
 
   private onPendingCallback?: (entry: PendingApprovalEntry) => Promise<void> | void;
 
+  private watcher?: FSWatcher;
+
+  private pendingResolvers = new Map<string, (entry: CompletedApprovalEntry) => void>();
+
+  private useFileWatch: boolean;
+
   constructor(options: ApprovalControllerOptions = {}) {
     this.store = options.store ?? new ApprovalStore();
     this.pollIntervalMs = options.pollIntervalMs ?? 500;
@@ -49,6 +57,46 @@ export class ApprovalController {
     this.decidedBy = options.decidedBy ?? "cli";
     this.logger = createLoggerFacade("approvals");
     this.onPendingCallback = options.onPending;
+    this.useFileWatch = options.useFileWatch ?? (process.env.APPROVALS_USE_FILE_WATCH !== "false");
+
+    if (this.useFileWatch) {
+      this.initFileWatcher();
+    }
+  }
+
+  private initFileWatcher(): void {
+    const completedPath = this.store.getCompletedPath();
+    this.watcher = chokidar.watch(completedPath, {
+      persistent: true,
+      ignoreInitial: true,
+      awaitWriteFinish: {
+        stabilityThreshold: 100,
+        pollInterval: 50
+      }
+    });
+
+    this.watcher.on("change", () => {
+      this.handleDecisionFileChange().catch((error) => {
+        this.logger.error("处理审批决策文件变化失败", error);
+      });
+    });
+
+    this.logger.info("审批文件监听已启用", { path: completedPath });
+  }
+
+  private async handleDecisionFileChange(): Promise<void> {
+    if (this.pendingResolvers.size === 0) {
+      return;
+    }
+
+    const completed = await this.store.listCompleted();
+    for (const [id, resolve] of this.pendingResolvers.entries()) {
+      const decision = completed.find((e) => e.id === id);
+      if (decision) {
+        resolve(decision);
+        this.pendingResolvers.delete(id);
+      }
+    }
   }
 
   setOnPending(callback: (entry: PendingApprovalEntry) => Promise<void> | void) {
@@ -73,12 +121,26 @@ export class ApprovalController {
   }
 
   private async waitForDecision(id: string): Promise<CompletedApprovalEntry> {
-    while (true) {
-      const decision = await this.store.findDecision(id);
-      if (decision) {
-        return decision;
+    // 先检查是否已有决策
+    const existing = await this.store.findDecision(id);
+    if (existing) {
+      return existing;
+    }
+
+    // 使用文件监听或轮询
+    if (this.useFileWatch) {
+      return new Promise<CompletedApprovalEntry>((resolve) => {
+        this.pendingResolvers.set(id, resolve);
+      });
+    } else {
+      // 降级到轮询模式
+      while (true) {
+        const decision = await this.store.findDecision(id);
+        if (decision) {
+          return decision;
+        }
+        await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
     }
   }
 
@@ -155,5 +217,12 @@ export class ApprovalController {
 
   getStore() {
     return this.store;
+  }
+
+  close(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.logger.info("审批文件监听已关闭");
+    }
   }
 }

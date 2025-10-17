@@ -2,8 +2,9 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { CompletedApprovalEntry, PendingApprovalEntry } from "./types.js";
+import { joinStatePath } from "../environment/pathResolver.js";
 
-const DEFAULT_DIR = resolve("state", "approvals");
+const DEFAULT_DIR = joinStatePath("approvals");
 const PENDING_FILE = "pending.json";
 const COMPLETED_FILE = "completed.json";
 
@@ -74,6 +75,14 @@ export class ApprovalStore {
   async findPending(id: string): Promise<PendingApprovalEntry | undefined> {
     const document = this.readPending();
     return document.items.find((item) => item.id === id);
+  }
+
+  getDirectory(): string {
+    return dirname(this.pendingPath);
+  }
+
+  getCompletedPath(): string {
+    return this.completedPath;
   }
 
   close(): void {

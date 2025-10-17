@@ -4,6 +4,7 @@ import path from "node:path";
 import { AgentConfigSchema } from "../agents/config/schema.js";
 import { loadAgentConfigs } from "../agents/config/loader.js";
 import type { AgentConfig } from "../agents/config/types.js";
+import { getHushOpsConfigDirectory } from "../shared/environment/pathResolver.js";
 
 export interface GenerateConfigOptions {
   id: string;
@@ -29,6 +30,8 @@ export interface ListConfigOptions {
   directory?: string;
 }
 
+export const DEFAULT_AGENT_CONFIG_DIR = path.join(getHushOpsConfigDirectory(), "agents");
+
 export async function generateConfig(options: GenerateConfigOptions): Promise<string> {
   const {
     id,
@@ -40,7 +43,7 @@ export async function generateConfig(options: GenerateConfigOptions): Promise<st
     defaultRunOptions,
     metadata,
     configVersion = "v1",
-    directory = "agents-config",
+    directory = DEFAULT_AGENT_CONFIG_DIR,
     output,
     dryRun,
     force

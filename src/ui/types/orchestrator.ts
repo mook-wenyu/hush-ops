@@ -36,6 +36,25 @@ export interface ExecutionRecord {
   bridgeMeta?: RuntimeBridgeMeta;
 }
 
+export interface ExecutionSnapshot {
+  executionId: string;
+  planId: string;
+  status: ExecutionRecord["status"];
+  executionStatus: RuntimeExecutionStatus;
+  running: boolean;
+  executorType: ExecutionRecord["executorType"];
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  currentNodeId?: string | null;
+  lastCompletedNodeId?: string | null;
+  pendingApprovals: PendingApprovalEntry[];
+  bridgeState?: BridgeState;
+  bridgeMeta?: RuntimeBridgeMeta;
+  result?: unknown;
+  error?: { message: string };
+}
+
 export interface OrchestratorEventEnvelope {
   event: string;
   executionId?: string;

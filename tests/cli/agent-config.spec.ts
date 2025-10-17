@@ -26,7 +26,7 @@ describe("agents:config CLI", () => {
 
   test("list prints fallback when directory empty", async () => {
     const { stdout } = await runCli(["agents:config:list", "--directory", tempDir]);
-    expect(stdout.trim()).toBe("未找到任何 agents-config 配置。");
+    expect(stdout.trim()).toBe("未找到任何智能体配置。");
   }, 30000);
 
   test("generate dry-run outputs JSON", async () => {

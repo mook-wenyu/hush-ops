@@ -16,5 +16,5 @@
     "types": ["node"]
   },
   "include": ["src", "examples", "tests"],
-  "exclude": ["dist", "node_modules", "src/ui", "tests/ui"]
+  "exclude": ["dist", "node_modules", "src/ui", "tests/ui", "tests/e2e"]
 }

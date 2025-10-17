@@ -90,4 +90,22 @@ describe("PluginRuntime", () => {
     expect(result.id).toBe("APP-1");
     runtime.dispose();
   });
+
+  it("在缺少 requestApproval 能力时抛出明确错误", async () => {
+    const runtime = createPluginRuntime({ descriptors: [] });
+    await runtime.initialise();
+    await expect(
+      runtime.requestApproval({ planId: "demo-plan", nodeId: "node-1" })
+    ).rejects.toThrow("当前运行时未提供审批请求能力");
+    runtime.dispose();
+  });
+
+  it("在缺少 replay 能力时抛出明确错误", async () => {
+    const runtime = createPluginRuntime({ descriptors: [] });
+    await runtime.initialise();
+    await expect(runtime.replayToolStream("exec-1", "corr-1")).rejects.toThrow(
+      "当前运行时未提供流式输出重放能力"
+    );
+    runtime.dispose();
+  });
 });

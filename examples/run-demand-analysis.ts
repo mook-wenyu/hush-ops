@@ -40,7 +40,7 @@ function parseCliInput(): CliInput {
   if (first === "--text" || first === "-t") {
     const text = rest.join(" ").trim();
     if (!text) {
-      console.error("使用 --text 需要提供需求内容，例如: npm run dev -- --text \"项目目标...\"");
+      console.error("使用 --text 需要提供需求内容，例如: npx tsx examples/run-demand-analysis.ts -- --text \"项目目标...\"");
       process.exitCode = 1;
       process.exit();
     }
@@ -50,7 +50,7 @@ function parseCliInput(): CliInput {
   if (first === "--file" || first === "-f") {
     const filePath = rest[0];
     if (!filePath) {
-      console.error("使用 --file 需要提供文件路径，例如: npm run dev -- --file ./samples/demo.md");
+      console.error("使用 --file 需要提供文件路径，例如: npx tsx examples/run-demand-analysis.ts -- --file ./samples/demo.md");
       process.exitCode = 1;
       process.exit();
     }
@@ -102,7 +102,7 @@ async function main() {
     );
   } else {
     console.log(
-      "已启动需求分析示例，默认使用内置 samples/demo.md。可通过 `npm run dev -- ./samples/demo.md` 或 `npm run dev -- --text \"项目目标...\"` 指定其他需求；按 Ctrl+C 可退出。"
+      "已启动需求分析示例，默认使用内置 samples/demo.md。可通过 `npx tsx examples/run-demand-analysis.ts -- --file ./samples/demo.md` 或 `--text \"项目目标...\"` 指定其他需求；按 Ctrl+C 可退出。"
     );
   }
 

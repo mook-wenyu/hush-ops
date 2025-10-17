@@ -8,6 +8,7 @@ import type {
   PluginManifest,
   PluginToolStreamEvent
 } from "../../runtime";
+import { MemoVirtualList } from "../../../components/VirtualList";
 
 const refreshListeners = new Set<() => void>();
 
@@ -546,9 +547,14 @@ function ToolExplorerPanel({ runtime }: { runtime: PluginRuntime }) {
                 <span>历史输出 CID {selectedHistory.correlationId.slice(-8)}</span>
                 <span className="text-[10px] text-base-content/50">{selectedHistory.events.length} 条记录</span>
               </div>
-              <pre className="mockup-code whitespace-pre-wrap break-words text-xs">
-                {selectedHistory.events
-                  .map((event) => {
+              <div className="mockup-code whitespace-pre-wrap break-words text-xs">
+                <MemoVirtualList
+                  items={selectedHistory.events}
+                  estimateSize={18}
+                  overscan={4}
+                  height={260}
+                  roleLabel="工具流历史明细"
+                  renderItem={(event) => {
                     const origin = event.source && event.source !== "live" ? event.source : null;
                     const parts = [
                       typeof event.sequence === "number" ? `#${event.sequence}` : null,
@@ -557,13 +563,11 @@ function ToolExplorerPanel({ runtime }: { runtime: PluginRuntime }) {
                       origin
                     ].filter(Boolean);
                     const prefix = parts.length ? `[${parts.join(" | ")}] ` : "";
-                    const content = event.status === "error"
-                      ? event.error ?? event.message
-                      : event.message;
-                    return `${prefix}${content}`;
-                  })
-                  .join("\n")}
-              </pre>
+                    const content = event.status === "error" ? event.error ?? event.message : event.message;
+                    return <div className="py-0.5">{prefix}{content}</div>;
+                  }}
+                />
+              </div>
             </div>
           )}
         </div>

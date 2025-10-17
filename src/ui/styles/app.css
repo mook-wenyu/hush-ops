@@ -1,21 +1,135 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@plugin "daisyui" {
+  /* 使用标准 light/dark，默认跟随系统（--prefersdark 适配暗色） */
+  themes: light --default, dark --prefersdark;
+}
 
+/* 仅使用 Tailwind + daisyUI 作为样式来源（无 tokens） */
+
+/* 主题由 daisyUI 的 data-theme 控制，根层不再强制深色 */
 :root {
-  color-scheme: dark;
   font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-  background-color: #0f1115;
-  color: #f8fbff;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: #0f1115;
 }
 
 a {
   color: inherit;
+  transition: color 0.2s ease;
 }
-@import "../theme/hush.css";
+
+a:hover { text-decoration: underline; }
+
+/* 优化滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 75, 255, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 75, 255, 0.5);
+}
+
+/* 使用 daisyUI card 组件默认样式 */
+
+/* 更窄的顶栏：以更高特异性覆盖 navbar、menu 项的最小高度（防止组件层顶住） */
+header.navbar{ min-height: 2rem; padding-block: .125rem; }
+header.navbar :where(.menu-horizontal li > *){ min-height: 1.5rem; }
+
+/* 改进按钮样式 */
+.btn {
+  transition: all 0.3s ease;
+  font-weight: 500;
+}
+
+/* 使用 daisyUI 预置按钮样式（btn/btn-primary/btn-outline/btn-ghost/btn-secondary），不做变量覆盖 */
+
+/* 改进徽章样式 */
+.badge {
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  transition: all 0.2s ease;
+}
+
+.badge-success {
+  background: linear-gradient(135deg, #38c95d 0%, #2a9f4a 100%);
+  box-shadow: 0 2px 8px rgba(56, 201, 93, 0.3);
+}
+
+.badge-warning {
+  background: linear-gradient(135deg, #ffd859 0%, #ffb700 100%);
+  box-shadow: 0 2px 8px rgba(255, 216, 89, 0.3);
+}
+
+.badge-error {
+  background: linear-gradient(135deg, #ff5757 0%, #d93030 100%);
+  box-shadow: 0 2px 8px rgba(255, 87, 87, 0.3);
+}
+
+.badge-info {
+  background: linear-gradient(135deg, #5eb3ff 0%, #2b7fd9 100%);
+  box-shadow: 0 2px 8px rgba(94, 179, 255, 0.3);
+}
+
+/* 改进警告框样式 */
+.alert {
+  backdrop-filter: blur(8px);
+  border: 1px solid currentColor;
+  border-opacity: 0.2;
+}
+
+/* 改进输入框样式 */
+.textarea,
+.select,
+.input {
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.textarea:focus,
+.select:focus,
+.input:focus {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 3px rgba(140, 75, 255, 0.15);
+}
+
+
+/* 主题辅助覆盖：动态 color-scheme */
+[data-theme='dark'] { color-scheme: dark; }
+[data-theme='light'] { color-scheme: light; }
+
+/* 焦点不遮挡基线：sticky header 下的滚动安全区 */
+html, body { scroll-padding-top: 72px; }
+
+/* React Flow 节点在滚动对齐时预留安全区 */
+.react-flow__node { scroll-margin-top: 72px; }
+
+/* 降低认知负担：遵循用户系统“减少动态效果”偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+    scroll-behavior: auto !important;
+  }
+  .card:hover,
+  .btn-primary:hover,
+  .btn-secondary:hover,
+  .btn-outline:hover {
+    transform: none !important;
+    box-shadow: none !important;
+  }
+}
