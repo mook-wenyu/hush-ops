@@ -1,0 +1,41 @@
+{
+  "id": "orphan-nodes-test",
+  "version": "v1",
+  "entry": "start",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "sequence",
+      "label": "开始节点",
+      "children": ["task1", "task2"]
+    },
+    {
+      "id": "task1",
+      "type": "local_task",
+      "label": "任务1",
+      "driver": "shell",
+      "command": "echo 'Task 1'"
+    },
+    {
+      "id": "task2",
+      "type": "local_task",
+      "label": "任务2",
+      "driver": "shell",
+      "command": "echo 'Task 2'"
+    },
+    {
+      "id": "orphan1",
+      "type": "local_task",
+      "label": "孤立节点1",
+      "driver": "shell",
+      "command": "echo 'Orphan 1'"
+    },
+    {
+      "id": "orphan2",
+      "type": "local_task",
+      "label": "孤立节点2",
+      "driver": "shell",
+      "command": "echo 'Orphan 2'"
+    }
+  ]
+}

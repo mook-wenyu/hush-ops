@@ -12,7 +12,9 @@ const CLI_ENTRY = resolve("src/cli/index.ts");
 const NODE = process.execPath;
 
 async function runCli(args: string[], env?: Record<string, string>) {
-  return execa(NODE, ["--import", "tsx", CLI_ENTRY, ...args], { env });
+  const opts: any = {};
+  if (env) opts.env = env;
+  return execa(NODE, ["--import", "tsx", CLI_ENTRY, ...args], opts);
 }
 
 describe("plan dry-run CLI", () => {

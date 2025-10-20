@@ -3,19 +3,19 @@ import { Command, Flags } from "@oclif/core";
 import { DEFAULT_AGENT_CONFIG_DIR, listConfigs } from "../../../agent-config.js";
 
 export default class AgentConfigList extends Command {
-  static summary = "列出现有智能体配置";
+  static override summary = "列出现有智能体配置";
 
-  static description = "扫描配置目录并输出已存在的智能体配置摘要";
+  static override description = "扫描配置目录并输出已存在的智能体配置摘要";
 
-  static flags = {
+  static override flags = {
     directory: Flags.string({ description: `配置目录（默认 ${DEFAULT_AGENT_CONFIG_DIR}）` })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { flags } = await this.parse(AgentConfigList);
 
     try {
-      const lines = await listConfigs({ directory: flags.directory });
+      const lines = await listConfigs(flags.directory ? { directory: flags.directory } : {});
       if (lines.length === 0) {
         this.log("未找到任何智能体配置。");
         return;

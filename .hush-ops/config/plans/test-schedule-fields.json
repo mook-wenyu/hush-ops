@@ -1,0 +1,11 @@
+{
+  "id": "test-schedule-fields",
+  "version": "v1",
+  "entry": "root",
+  "nodes": [],
+  "schedule": {
+    "enabled": true,
+    "kind": "cron",
+    "cron": "0 0 * * *"
+  }
+}

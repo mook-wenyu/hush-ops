@@ -9,6 +9,7 @@ import type {
   PluginToolStreamEvent
 } from "../../runtime";
 import { MemoVirtualList } from "../../../components/VirtualList";
+import { cardClasses } from "../../../utils/classNames";
 
 const refreshListeners = new Set<() => void>();
 
@@ -187,15 +188,16 @@ function ToolExplorerPanel({ runtime }: { runtime: PluginRuntime }) {
             : "";
         let nextEntries = existing ? [...existing.entries] : [];
         if (displayMessage) {
-          const entry: ToolChunkEntry = {
-            sequence: typeof event.sequence === "number" ? event.sequence : undefined,
+          const entry: any = {
             message: displayMessage,
             replayed: Boolean(event.replayed),
             status: event.status,
-            timestamp: event.timestamp,
-            source: event.source
+            timestamp: event.timestamp
           };
-          nextEntries = upsertChunkEntry(nextEntries, entry);
+          if (typeof event.sequence === "number") entry.sequence = event.sequence;
+          if (event.source) entry.source = event.source as string;
+          const entryTyped = entry as ToolChunkEntry;
+          nextEntries = upsertChunkEntry(nextEntries, entryTyped);
         }
         const nextStatus = event.status ?? existing?.latestStatus;
         const completed =
@@ -208,19 +210,21 @@ function ToolExplorerPanel({ runtime }: { runtime: PluginRuntime }) {
             : existing?.lastError;
         const nextFinalResult =
           typeof event.result !== "undefined" ? event.result : existing?.finalResult;
-        const nextMeta: ToolResultMeta = {
+        const nextMeta: any = {
           toolName: event.toolName,
-          correlationId: event.correlationId ?? existing?.correlationId,
           receivedAt: event.timestamp,
           entries: nextEntries,
           latestStatus: nextStatus,
           completed,
-          lastError: nextLastError ?? undefined,
           finalResult: nextFinalResult
         };
+        const cid = event.correlationId ?? existing?.correlationId;
+        if (cid) nextMeta.correlationId = cid;
+        if (nextLastError) nextMeta.lastError = nextLastError;
+        const nextMetaTyped = nextMeta as ToolResultMeta;
         return {
           ...prev,
-          [key]: nextMeta
+          [key]: nextMetaTyped
         };
       });
     });
@@ -302,7 +306,6 @@ function ToolExplorerPanel({ runtime }: { runtime: PluginRuntime }) {
           ...prev,
           [toolName]: {
             toolName,
-            correlationId: undefined,
             receivedAt: new Date().toISOString(),
             entries: [],
             latestStatus: "success",
@@ -390,7 +393,7 @@ function ToolExplorerPanel({ runtime }: { runtime: PluginRuntime }) {
                 .join("\n")
             : "";
           return (
-            <li key={tool.name} className="card bg-base-200/70 border border-base-content/10 shadow-sm">
+            <li key={tool.name} className={cardClasses({ variant: "nested", bordered: true })}>
               <div className="card-body space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-1">

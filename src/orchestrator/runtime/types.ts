@@ -21,9 +21,9 @@ export interface RuntimePendingApprovalSummary {
 }
 
 export interface RuntimeBridgeMeta {
-  reason?: string;
-  attempt?: number;
-  delayMs?: number;
+  reason?: string | undefined;
+  attempt?: number | undefined;
+  delayMs?: number | undefined;
 }
 
 export interface RuntimeEventPayloads {

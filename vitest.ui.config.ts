@@ -13,7 +13,13 @@ export default defineConfig({
       "tests/ui/**/*.spec.ts",
       "tests/ui/**/*.spec.tsx"
     ],
-    exclude: ["tests/e2e/**", "tests/.removed/**"],
+    exclude: [
+      "tests/e2e/**",
+      "tests/.removed/**",
+      "tests/ui/.removed/**",
+      "tests/ui/*.removed*.spec.ts",
+      "tests/ui/*.removed*.spec.tsx"
+    ],
     environment: "jsdom",
     setupFiles: ["tests/ui/setup.ts"],
     globals: false

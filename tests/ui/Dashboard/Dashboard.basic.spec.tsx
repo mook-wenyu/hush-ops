@@ -39,7 +39,7 @@ describe('Dashboard — 基础渲染测试', () => {
     await Promise.resolve();
     
     // 验证基本元素存在
-    expect(screen.getByText(/调度总数/i)).toBeInTheDocument();
+    expect(screen.getByText(/计划列表/i)).toBeInTheDocument();
     expect(screen.getByText(/工作模式/i)).toBeInTheDocument();
   });
 });

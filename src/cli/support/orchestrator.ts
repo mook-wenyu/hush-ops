@@ -31,9 +31,12 @@ export function resolveExecutionMode(flags: OrchestratorFlags, env: NodeJS.Proce
 }
 
 export function createOrchestratorClient(baseUrl: string, options: Partial<OrchestratorClientOptions> = {}): OrchestratorClient {
-  return new OrchestratorClient({
+  const opts: OrchestratorClientOptions = {
     baseUrl,
-    fetchImpl: options.fetchImpl ?? fetch,
-    WebSocketImpl: options.WebSocketImpl
-  });
+    fetchImpl: options.fetchImpl ?? fetch
+  };
+  if (options.WebSocketImpl) {
+    (opts as any).WebSocketImpl = options.WebSocketImpl;
+  }
+  return new OrchestratorClient(opts);
 }

@@ -87,7 +87,8 @@ export async function generateConfig(options: GenerateConfigOptions): Promise<st
 }
 
 export async function listConfigs(options: ListConfigOptions = {}): Promise<string[]> {
-  const configs = await loadAgentConfigs({ directory: options.directory });
+  const configOptions = options.directory ? { directory: options.directory } : {};
+  const configs = await loadAgentConfigs(configOptions as { directory?: string });
   if (configs.length === 0) {
     return [];
   }

@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 
 import { usePluginPanels } from "../plugins/runtime";
+import { cardClasses } from "../utils/classNames";
 
 export function PluginSidePanels() {
   const panels = usePluginPanels();
@@ -12,7 +13,7 @@ export function PluginSidePanels() {
   return (
     <div className="space-y-6">
       {panels.map((panel) => (
-        <div key={panel.id} className="card bg-base-300/70 shadow-xl">
+        <div key={panel.id} className={cardClasses()}>
           <div className="card-body space-y-2">
             <header className="flex flex-col gap-1">
               <h3 className="text-base font-semibold text-base-content">{panel.title}</h3>

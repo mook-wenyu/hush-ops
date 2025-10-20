@@ -29,11 +29,11 @@ const LEGACY_PLAN_PATH = path.resolve("plans", "demo-mixed.json");
 const DEFAULT_STATE_PATH = joinStatePath();
 
 export default class RunAuto extends Command {
-  static summary = "自动执行 Plan";
+  static override summary = "自动执行 Plan";
 
-  static description = "复用 auto-exec 流程自动执行 Plan，支持 MCP mock 与 JSON 持久化配置。";
+  static override description = "复用 auto-exec 流程自动执行 Plan，支持 MCP mock 与 JSON 持久化配置。";
 
-  static flags = {
+  static override flags = {
     plan: Flags.string({
       description: "Plan JSON 文件路径",
       default: DEFAULT_PLAN_PATH
@@ -47,15 +47,16 @@ export default class RunAuto extends Command {
     wait: Flags.boolean({ description: "等待执行完成（远程模式默认 true，可使用 --no-wait 跳过）", allowNo: true, default: true })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const parsed = await this.parse(RunAuto);
     const flags = parsed.flags as RunAutoFlags;
     const planSource = this.resolvePlanSource(flags);
 
-    const mode = resolveExecutionMode(
-      { baseUrl: flags["base-url"], remote: flags.remote, local: flags.local },
-      process.env
-    );
+    const execFlags: any = {};
+    if (flags["base-url"]) execFlags.baseUrl = flags["base-url"];
+    if (typeof flags.remote !== "undefined") execFlags.remote = flags.remote;
+    if (typeof flags.local !== "undefined") execFlags.local = flags.local;
+    const mode = resolveExecutionMode(execFlags, process.env);
 
     if (mode.mode === "remote") {
       await this.runRemote(planSource, mode.baseUrl!, flags);
@@ -89,11 +90,12 @@ export default class RunAuto extends Command {
 
     this.log(`[远程] 调用 ${baseUrl}/plans/execute`);
     try {
+      const payloadBase: Parameters<typeof client.executePlan>[0] = { plan: planJson };
       const response = await client.executePlan({
-        plan: planJson,
-        useMockBridge: flags["mock-mcp"],
-        databasePath: flags.database,
-        mcpServer: flags["mcp-server"]
+        ...payloadBase,
+        ...(flags["mock-mcp"] !== undefined ? { useMockBridge: Boolean(flags["mock-mcp"]) } : {}),
+        ...(flags.database ? { databasePath: flags.database } : {}),
+        ...(flags["mcp-server"] ? { mcpServer: flags["mcp-server"] as string } : {})
       });
       this.log(`已提交执行：${response.executionId}，状态 ${response.status}`);
       if (!flags.wait) {
@@ -115,23 +117,25 @@ export default class RunAuto extends Command {
     flags: Pick<RunAutoFlags, "database" | "mock-mcp" | "mcp-server">
   ): Promise<void> {
     try {
-      const result = await runAutoExecution({
+      const runOpts: any = {
         planPath,
-        databasePath: flags.database,
         useMockBridge: flags["mock-mcp"] ?? false,
-        mcpServer: flags["mcp-server"],
         logger: {
-          info: (message) => this.log(message),
-          warn: (message) => this.warn(message),
-          error: (message, error) => {
+          info: (message: string) => this.log(message),
+          warn: (message: string) => this.warn(message),
+          error: (message: string, error?: unknown) => {
             const details = error instanceof Error ? `：${error.message}` : "";
             this.warn(`${message}${details}`);
           }
         },
-        onExecutionComplete: ({ status }) => {
+        onExecutionComplete: ({ status }: { status: string }) => {
           this.log(`执行结果：${status}`);
         }
-      });
+      };
+      if (flags.database) runOpts.databasePath = flags.database;
+      if (flags["mcp-server"]) runOpts.mcpServer = flags["mcp-server"];
+
+      const result = await runAutoExecution(runOpts);
       this.log(`执行完成，状态：${result.status}`);
       this.log("[提示] 可加入 --remote 或设置 ORCHESTRATOR_BASE_URL 通过服务端执行。");
     } catch (error) {

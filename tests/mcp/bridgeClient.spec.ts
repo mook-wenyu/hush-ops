@@ -39,12 +39,12 @@ class StubTransport implements Transport {
   }
 }
 
-class StubClient implements Partial<Client> {
+class StubClient { 
   public onclose?: () => void;
 
   public onerror?: (error: Error) => void;
 
-  public fallbackNotificationHandler?: Client["fallbackNotificationHandler"];
+  public fallbackNotificationHandler!: Client["fallbackNotificationHandler"];
 
   readonly connectCalls: Transport[] = [];
 

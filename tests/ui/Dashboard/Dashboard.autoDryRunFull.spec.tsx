@@ -75,9 +75,9 @@ describe('Dashboard auto dry-run debounce', () => {
     const editBtn = screen.getByRole('button', { name: /编辑器/i });
     fireEvent.click(editBtn);
 
-    // 验证进入编辑器视图
+    // 验证进入编辑器视图（以“执行计划”按钮出现为准）
     await waitFor(() => {
-      expect(screen.getByText(/编辑模式已开启/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /执行计划|执行/i })).toBeInTheDocument();
     });
 
     // 等待计划列表加载

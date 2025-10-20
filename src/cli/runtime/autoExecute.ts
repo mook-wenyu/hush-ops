@@ -111,18 +111,19 @@ async function createBridgeSession(options: AutoExecuteOptions): Promise<BridgeS
   if (!options.mcpServer) {
     bridgeLogger.info(`[bridge] 未指定 --mcp-server，使用默认配置：${serverConfig.name}`);
   }
-  const client = new BridgeClient({
+  const clientOpts: any = {
     endpoint: serverConfig.endpoint,
     serverName: serverConfig.name,
-    headers: serverConfig.headers,
-    retry: serverConfig.retry,
-    userId: serverConfig.session?.userId,
     sessionMetadata: {
       serverName: serverConfig.name,
       endpoint: serverConfig.endpoint,
       ...(serverConfig.session?.metadata ?? {})
     }
-  });
+  };
+  if (serverConfig.headers) clientOpts.headers = serverConfig.headers;
+  if (serverConfig.retry) clientOpts.retry = serverConfig.retry;
+  if (serverConfig.session?.userId) clientOpts.userId = serverConfig.session.userId;
+  const client = new BridgeClient(clientOpts);
   const session = new BridgeSession(client, {
     logger: {
       info: (msg) => bridgeLogger.info(`[bridge] ${msg}`),

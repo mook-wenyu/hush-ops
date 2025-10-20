@@ -1,0 +1,17 @@
+{
+  "id": "scheduled-plan",
+  "version": "v1",
+  "entry": "root",
+  "nodes": [
+    {
+      "id": "root",
+      "type": "sequence",
+      "children": []
+    }
+  ],
+  "schedule": {
+    "enabled": true,
+    "kind": "cron",
+    "cron": "*/5 * * * *"
+  }
+}

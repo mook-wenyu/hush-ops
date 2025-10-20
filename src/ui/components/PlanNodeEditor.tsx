@@ -1,6 +1,8 @@
-import { ChangeEvent, useMemo } from "react";
+import type { ChangeEvent } from "react";
+import { useMemo } from "react";
 
 import type { PlanJson, PlanNodeJson } from "./graph/PlanCanvas";
+import { cardClasses } from "../utils/classNames";
 
 interface PlanNodeEditorProps {
   readonly plan: PlanJson | null;
@@ -18,7 +20,7 @@ function formatOption(node: PlanNodeJson): string {
 }
 
 export function PlanNodeEditor({ plan, selectedNodeId, onSelectNode, onUpdateNode }: PlanNodeEditorProps) {
-  const nodes = plan?.nodes ?? [];
+  const nodes = useMemo(() => plan?.nodes ?? [], [plan?.nodes]);
   const current = useMemo(() => nodes.find((node) => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
 
   const handleSelectChange = (event: ChangeEvent<HTMLSelectElement>) => {
@@ -43,7 +45,7 @@ export function PlanNodeEditor({ plan, selectedNodeId, onSelectNode, onUpdateNod
 
   if (!plan || nodes.length === 0) {
     return (
-      <div className="card bg-base-300/70 shadow-xl">
+      <div className={cardClasses()}>
         <div className="card-body space-y-3 text-sm text-base-content/70">
           <h2 className="card-title text-lg">Plan 节点编辑器</h2>
           <p>当前 Plan 中没有节点，粘贴或选择一个计划后可进行编辑。</p>
@@ -53,7 +55,7 @@ export function PlanNodeEditor({ plan, selectedNodeId, onSelectNode, onUpdateNod
   }
 
   return (
-    <div className="card bg-base-300/70 shadow-xl">
+    <div className={cardClasses()}>
       <div className="card-body space-y-4">
         <div>
           <h2 className="card-title text-lg">Plan 节点编辑器</h2>

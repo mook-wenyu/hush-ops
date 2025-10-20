@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
-import { PlanActions } from "../../components/PlanActions";
-import InspectorCore from "../../features/inspector/InspectorCore";
+import { PanelGroup, Panel } from "react-resizable-panels";
+import type { XYPosition } from "@xyflow/react";
+
 import GraphCanvasShell from "../../features/graph/GraphCanvasShell";
-import { type PlanJson, type PlanNodeJson, type PlanNodePositionUpdate } from "../../components/graph/PlanCanvas";
-import { dryRunPlan, executePlan, type McpServerSummary } from "../../services";
+import { buildPlanGraph, type PlanJson, type PlanNodeJson, type PlanNodePositionUpdate } from "../../components/graph/PlanCanvas";
+import { executePlan, type McpServerSummary } from "../../services";
 import { updatePlanInputWithNodePositions } from "../../utils/planTransforms";
 import type { BridgeState } from "../../types/orchestrator";
 
@@ -31,10 +31,10 @@ export default function EditorView(props: EditorViewProps) {
     selectedNodeId,
     servers,
     selectedServer,
-    mcpError,
+    mcpError: _mcpError,
     bridgeState,
     pendingNodeIds,
-    runtimeSnapshot,
+    runtimeSnapshot: _runtimeSnapshot,
     onPlanInputChange,
     onSelectedNodeChange,
     onServerChange,
@@ -44,9 +44,9 @@ export default function EditorView(props: EditorViewProps) {
   } = props;
 
   const [plan, setPlan] = useState<PlanJson | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [_warnings, setWarnings] = useState<string[]>([]);
+  const [_message, setMessage] = useState<string | null>(null);
+  const [_error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [compileDiagnostics, setCompileDiagnostics] = useState<Array<{ severity: string; message: string; nodeId?: string; edgeId?: string }>>([]);
 
@@ -112,7 +112,11 @@ export default function EditorView(props: EditorViewProps) {
             let edges: Array<{ id?: string; source: string; target: string }> = [];
             if (Array.isArray((obj as any).edges)) {
               edges = (obj as any).edges
-                .map((e: any) => ({ id: e?.id, source: String(e?.source || ''), target: String(e?.target || '') }))
+                .map((e: any) => {
+                  const base: any = { source: String(e?.source || ''), target: String(e?.target || '') };
+                  if (typeof e?.id === 'string' && e.id) base.id = e.id;
+                  return base;
+                })
                 .filter((e: any) => e.source && e.target);
             } else {
               for (const n of (Array.isArray((obj as any).nodes) ? (obj as any).nodes : [])) {
@@ -191,7 +195,7 @@ export default function EditorView(props: EditorViewProps) {
         const res = await simulateDryRun(obj, { signal: ac.signal });
         if (!cancelled && token === dryRunTokenRef.current) {
           setWarnings(res.warnings ?? []);
-          setMessage(`自动 dry-run 完成`);
+          // 删除“自动 dry-run 完成”提示，保持静默
           setError(null);
         }
       } catch (e) {
@@ -233,7 +237,11 @@ export default function EditorView(props: EditorViewProps) {
           let edges: Array<{ id?: string; source: string; target: string }> = [];
           if (Array.isArray((obj as any).edges)) {
             edges = (obj as any).edges
-              .map((e: any) => ({ id: e?.id, source: String(e?.source || ''), target: String(e?.target || '') }))
+              .map((e: any) => {
+                const base: any = { source: String(e?.source || ''), target: String(e?.target || '') };
+                if (typeof e?.id === 'string' && e.id) base.id = e.id;
+                return base;
+              })
               .filter((e: any) => e.source && e.target);
           } else {
             for (const n of (Array.isArray((obj as any).nodes) ? (obj as any).nodes : [])) {
@@ -266,13 +274,9 @@ export default function EditorView(props: EditorViewProps) {
   }, [planInput]);
 
   // PlanActions 处理
-  const onPlanChange = useCallback((value: string) => {
-    onPlanInputChange(value);
-    setMessage(null);
-    setError(null);
-  }, [onPlanInputChange]);
 
-  const onDryRun = useCallback(async () => {
+  // 已不再使用的手动 dry-run，改由自动 dry-run 与执行按钮触发
+  /* const onDryRun = useCallback(async () => {
     let parsed: unknown;
     try {
       parsed = JSON.parse(planInput);
@@ -295,6 +299,8 @@ export default function EditorView(props: EditorViewProps) {
       setBusy(false);
     }
   }, [planInput]);
+
+  */
 
   const onExecute = useCallback(async () => {
     let parsed: unknown;
@@ -344,28 +350,86 @@ export default function EditorView(props: EditorViewProps) {
   const onUpdatePositions = useCallback((updates: readonly PlanNodePositionUpdate[]) => {
     if (!updates.length) return;
     try {
-      const nextInput = updatePlanInputWithNodePositions(planInput, updates);
-      onPlanInputChange(nextInput);
+      // 1) 解析当前 plan，并构造当前位置索引（幂等过滤，避免无意义写回）
+      const obj = planInput.trim() ? (JSON.parse(planInput) as PlanJson) : null;
+      if (!obj || !Array.isArray(obj.nodes)) return;
+
+      const index = new Map<string, { x?: number; y?: number }>();
+      for (const n of obj.nodes) {
+        const pos = n?.ui?.position;
+        if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+          index.set(n.id, { x: pos.x, y: pos.y });
+        }
+      }
+
+      const filtered: PlanNodePositionUpdate[] = [];
+      for (const u of updates) {
+        const cur = index.get(u.id);
+        if (!cur) { filtered.push(u); continue; }
+        // 与 PlanCanvas 中一致：坐标精度按 0.01 归一；完全相等才视为“未变”
+        const same = cur.x === u.position.x && cur.y === u.position.y;
+        if (!same) filtered.push(u);
+      }
+      if (filtered.length === 0) return; // 没有实际变化，直接返回，打断环路
+
+      // 2) 仅当字符串确实发生变化时才写回，避免 setState 同值导致不必要渲染
+      const nextInput = updatePlanInputWithNodePositions(planInput, filtered);
+      if (nextInput !== planInput) {
+        onPlanInputChange(nextInput);
+      }
     } catch {
       // 忽略解析错误
     }
   }, [planInput, onPlanInputChange]);
 
   // 计划变更
+  const historyRef = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
+
   const withParsedPlan = useCallback((mutator: (p: PlanJson) => void) => {
     try {
       const obj = planInput.trim() ? (JSON.parse(planInput) as PlanJson) : { id: `plan-${Date.now()}`, nodes: [] };
       if (!Array.isArray(obj.nodes)) obj.nodes = [];
+      // 记录历史用于撤销/重做
+      historyRef.current.past.push(planInput);
+      historyRef.current.future = [];
       mutator(obj);
       onPlanInputChange(JSON.stringify(obj, null, 2));
     } catch {
       const obj: PlanJson = { id: `plan-${Date.now()}`, nodes: [] };
+      historyRef.current.past.push(planInput);
+      historyRef.current.future = [];
       mutator(obj);
       onPlanInputChange(JSON.stringify(obj, null, 2));
     }
   }, [planInput, onPlanInputChange]);
 
-  const onCreateNode = useCallback((opts: { connectFrom?: string | null }) => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        // 撤销
+        const prev = historyRef.current.past.pop();
+        if (prev != null) {
+          e.preventDefault();
+          historyRef.current.future.push(planInput);
+          onPlanInputChange(prev);
+        }
+      } else if ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y') {
+        // 重做
+        const next = historyRef.current.future.pop();
+        if (next != null) {
+          e.preventDefault();
+          historyRef.current.past.push(planInput);
+          onPlanInputChange(next);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [planInput, onPlanInputChange]);
+
+  const onCreateNode = useCallback((opts: { connectFrom?: string | null; position?: XYPosition }) => {
     const baseId = `n${Date.now().toString(36)}`;
     withParsedPlan((p) => {
       const existing = new Set((p.nodes ?? []).map((n) => n.id));
@@ -374,7 +438,7 @@ export default function EditorView(props: EditorViewProps) {
       while (existing.has(id)) {
         id = `${baseId}-${i++}`;
       }
-      const newNode: PlanJson["nodes"] extends (infer T)[] ? (T & any) : any = { id, label: id, children: [] };
+      const newNode: PlanJson["nodes"] extends (infer T)[] ? (T & any) : any = { id, label: id, children: [], ui: opts.position ? { position: { x: Math.round((opts.position.x ?? 0) * 100) / 100, y: Math.round((opts.position.y ?? 0) * 100) / 100 } } : undefined };
       p.nodes!.push(newNode);
       if (!p.entry) p.entry = id;
       const from = opts.connectFrom ?? null;
@@ -393,7 +457,14 @@ export default function EditorView(props: EditorViewProps) {
       p.nodes.forEach((n) => {
         if (Array.isArray(n.children)) n.children = n.children.filter((c) => c !== nodeId);
       });
-      if (p.entry === nodeId) p.entry = p.nodes[0]?.id;
+      if (p.entry === nodeId) {
+        const nextEntry = p.nodes[0]?.id;
+        if (typeof nextEntry === 'string' && nextEntry) {
+          p.entry = nextEntry;
+        } else {
+          delete (p as { entry?: string }).entry;
+        }
+      }
       if (selectedNodeId === nodeId) onSelectedNodeChange(null);
     });
   }, [selectedNodeId, withParsedPlan, onSelectedNodeChange]);
@@ -403,10 +474,52 @@ export default function EditorView(props: EditorViewProps) {
       const src = p.nodes?.find((n) => n.id === source);
       const tgtExists = p.nodes?.some((n) => n.id === target);
       if (!src || !tgtExists) return;
-      src.children = Array.isArray(src.children) ? src.children : [];
-      if (!src.children.includes(target)) src.children.push(target);
+      // 若采用 v3 edges，则优先写入 edges；否则回退 children
+      if (Array.isArray(p.edges)) {
+        const key = `${source}->${target}`;
+        const exists = p.edges.some((e) => (e.id ? e.id === key : (e.source === source && e.target === target)));
+        if (!exists) p.edges.push({ id: key, source, target });
+      } else {
+        src.children = Array.isArray(src.children) ? src.children : [];
+        if (!src.children.includes(target)) src.children.push(target);
+      }
     });
   }, [withParsedPlan]);
+
+  const onDeleteEdge = useCallback((source: string, target: string) => {
+    withParsedPlan((p) => {
+      if (Array.isArray(p.edges) && p.edges.length > 0) {
+        p.edges = p.edges.filter((e) => !(e.source === source && e.target === target));
+      } else if (Array.isArray(p.nodes)) {
+        const src = p.nodes.find((n) => n.id === source);
+        if (src && Array.isArray(src.children)) {
+          src.children = src.children.filter((c) => c !== target);
+        }
+      }
+    });
+  }, [withParsedPlan]);
+
+  const onCleanupOrphanedNodes = useCallback(() => {
+    if (!plan) return;
+    const graph = buildPlanGraph(plan);
+    if (!graph || graph.orphanNodes.length === 0) {
+      alert('没有未连接的节点需要清理');
+      return;
+    }
+    const nodeNames = graph.orphanNodes.map(n => n.label || n.type || n.id).join(', ');
+    const confirmed = window.confirm(
+      `确定要删除 ${graph.orphanNodes.length} 个未连接节点吗？\n\n${nodeNames}`
+    );
+    if (confirmed) {
+      withParsedPlan((p) => {
+        const idsToDelete = new Set(graph.orphanNodes.map(n => n.id));
+        p.nodes = p.nodes?.filter(n => !idsToDelete.has(n.id)) || [];
+        if (selectedNodeId && idsToDelete.has(selectedNodeId)) {
+          onSelectedNodeChange(null);
+        }
+      });
+    }
+  }, [plan, withParsedPlan, selectedNodeId, onSelectedNodeChange]);
 
   // 退出保护
   useEffect(() => {
@@ -420,65 +533,55 @@ export default function EditorView(props: EditorViewProps) {
 
   return (
     <div className="h-full flex flex-col p-3 gap-3">
-      {/* 顶部提示信息 - 固定高度 */}
-      <div className="alert alert-info text-xs flex-shrink-0">
-        <span>编辑模式已开启：可在画布与右侧面板直接编辑。</span>
-      </div>
 
-      {/* PlanActions 工具栏 - 固定高度 */}
-      <div className="flex-shrink-0">
-        <PlanActions
-          planValue={planInput}
-          onPlanChange={onPlanChange}
-          onDryRun={onDryRun}
-          onExecute={onExecute}
-          serverOptions={servers}
-          selectedServer={selectedServer}
-          onServerChange={onServerChange}
-          serverError={mcpError}
-          warnings={warnings}
-          message={message}
-          busy={busy}
-          disabled={false}
-          error={error}
-        />
+      {/* 编辑器工具栏：MCP 服务器 + 执行 */}
+      <div className="flex-shrink-0 flex items-center justify-between gap-2">
+        <label className="form-control w-full max-w-sm">
+          <div className="label"><span className="label-text text-xs">MCP 服务器</span></div>
+          <select
+            className="select select-bordered select-sm"
+            value={selectedServer ?? ""}
+            onChange={(e)=> onServerChange(e.target.value || null)}
+            disabled={busy || servers.length === 0}
+            aria-label="MCP 服务器"
+          >
+            {servers.length === 0 ? (
+              <option value="">无可用配置</option>
+            ) : (
+              servers.map((s)=> (
+                <option key={s.name} value={s.name}>{s.description ? `${s.name} · ${s.description}` : s.name}</option>
+              ))
+            )}
+          </select>
+        </label>
+        <div className="flex items-center gap-2">
+          <button type="button" className="btn btn-primary btn-sm" onClick={onExecute} disabled={busy || !selectedServer}>
+            {busy ? "执行中…" : "执行计划"}
+          </button>
+        </div>
       </div>
 
       {/* 画布与检查器 - 占据剩余空间 */}
       <div className="flex-1 min-h-0">
-        <PanelGroup direction="horizontal" autoSaveId="editor-canvas-inspector-layout">
+        <PanelGroup direction="horizontal">
           {/* 画布 */}
-          <Panel id="canvas" order={1} defaultSize={75} minSize={60}>
-            <div className="h-full overflow-auto">
+          <Panel id="canvas" order={1} defaultSize={100} minSize={60}>
+            <div className="h-full overflow-hidden">
               <GraphCanvasShell
                 plan={plan}
                 bridgeState={bridgeState}
                 pendingNodeIds={pendingNodeIds}
-                currentNodeId={runtimeSnapshot?.currentNodeId ?? null}
-                completedNodeIds={new Set(runtimeSnapshot?.completedNodeIds ?? [])}
-                executionStatus={runtimeSnapshot?.executionStatus as any}
                 selectedNodeId={selectedNodeId}
                 onSelectNode={onSelectedNodeChange}
                 onUpdateNodePositions={onUpdatePositions}
                 onCreateNode={onCreateNode}
                 onDeleteNode={onDeleteNode}
                 onConnectEdge={onConnectEdge}
-                editable={true}
-                diagnostics={compileDiagnostics}
-              />
-            </div>
-          </Panel>
-
-          <PanelResizeHandle className="w-3 bg-base-300/60 hover:bg-base-300 transition-colors cursor-col-resize" />
-
-          {/* 右侧：节点详情 */}
-          <Panel id="inspector" order={2} defaultSize={25} minSize={20} maxSize={40}>
-            <div className="h-full overflow-auto">
-              <InspectorCore
-                plan={plan}
-                selectedNodeId={selectedNodeId}
-                disabled={false}
+                onDeleteEdge={onDeleteEdge}
+                onCleanupOrphanedNodes={onCleanupOrphanedNodes}
                 onUpdateNode={onUpdateNode}
+                editable={!busy}
+                diagnostics={compileDiagnostics}
               />
             </div>
           </Panel>

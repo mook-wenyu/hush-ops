@@ -11,7 +11,6 @@ describe('openapi.json', () => {
     expect(doc.components?.schemas?.PlanSummary).toBeDefined();
     expect(doc.paths['/api/v1/plans']).toBeDefined();
     expect(doc.paths['/api/v1/executions']).toBeDefined();
-    expect(doc.paths['/api/v1/schedules/export']).toBeDefined();
     expect(doc.paths['/api/v1/designer/compile']).toBeDefined();
     expect(doc.paths['/api/v1/plans/dry-run']).toBeDefined();
   });

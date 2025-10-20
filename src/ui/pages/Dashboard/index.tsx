@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
-import { IconPlus, IconTrash } from "@tabler/icons-react";
+// import { IconPlus, IconTrash } from "@tabler/icons-react";
 import {
   useAppStoreFeatureFlag,
   useAppStoreSelector,
@@ -18,17 +18,14 @@ import {
   submitApprovalDecision,
   fetchPlans,
   fetchPlanById,
-  createPlan,
-  deletePlan,
   uploadPlanFiles,
-  fetchSchedules,
   type McpServerSummary,
   fetchMcpServers
 } from "../../services";
-import { type ScheduleItem } from "../../services";
 import PlanListPanel from "../../features/plans/PlanListPanel";
 import EditorView from "./EditorView";
 import MonitorView from "./MonitorView";
+import { ExecutionDetailsDrawer } from "../../components/ExecutionDetailsDrawer";
 
 export default function Dashboard() {
   const storeEnabled = useAppStoreFeatureFlag();
@@ -102,7 +99,7 @@ function DashboardCore({
   const [activeTab, setActiveTab] = useState<'editor' | 'monitor'>(() => {
     try {
       const v = localStorage.getItem('dashboard_active_tab');
-      if (v === 'editor' || v === 'monitor') return v;
+      if (v === 'editor' || v === 'monitor') return v as any;
       const legacy = localStorage.getItem('dashboard_edit_mode');
       return legacy === '1' ? 'editor' : 'monitor';
     } catch {
@@ -116,6 +113,7 @@ function DashboardCore({
   const [plansError, setPlansError] = useState<string | null>(null);
   const [planInput, setPlanInput] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
 
   // MCP 服务器
   const [servers, setServers] = useState<McpServerSummary[]>([]);
@@ -123,8 +121,10 @@ function DashboardCore({
   const [mcpError, setMcpError] = useState<string | null>(null);
 
   // 调度摘要
-  const [schedules, setSchedules] = useState<ScheduleItem[]>([]);
   const [stopProcessingId, setStopProcessingId] = useState<string | null>(null);
+
+  // 防止无限刷新的 ref
+  const hasAttemptedInitialLoad = useRef(false);
 
   // 初始化
   useEffect(() => { setMounted(true); }, []);
@@ -173,10 +173,6 @@ function DashboardCore({
         if (!cancelled) setPlansLoading(false);
       });
 
-    // 加载调度摘要
-    fetchSchedules()
-      .then((list) => { if (!cancelled) setSchedules(list); })
-      .catch(() => void 0);
 
     return () => { cancelled = true; };
   }, []);
@@ -203,6 +199,39 @@ function DashboardCore({
       setPlansLoading(false);
     }
   }, []);
+
+  // 当桥接状态恢复为 connected 且列表为空时，自动重试加载计划，避免用户手动刷新
+  useEffect(() => {
+    if (bridgeState === 'connected' && plans.length === 0 && !plansLoading && !hasAttemptedInitialLoad.current) {
+      hasAttemptedInitialLoad.current = true;
+      const timer = setTimeout(() => { void refreshPlans(); }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [bridgeState, plans.length, plansLoading, refreshPlans]);
+
+  // 页面重新可见或网络恢复时尝试刷新（幂等，后端未就绪则无害）
+  useEffect(() => {
+    const onVisibility = () => {
+      try {
+        if (document.visibilityState === 'visible' && plans.length === 0 && !plansLoading && !hasAttemptedInitialLoad.current) {
+          hasAttemptedInitialLoad.current = true;
+          void refreshPlans();
+        }
+      } catch {}
+    };
+    const onOnline = () => {
+      if (plans.length === 0 && !plansLoading && !hasAttemptedInitialLoad.current) {
+        hasAttemptedInitialLoad.current = true;
+        void refreshPlans();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [plans.length, plansLoading, refreshPlans]);
 
   // 停止执行
   const handleStop = useCallback(async (id: string) => {
@@ -252,34 +281,7 @@ function DashboardCore({
     }
   }, []);
 
-  const handlePlanCreate = useCallback(async () => {
-    try {
-      const blank: any = { nodes: [] };
-      const res = await createPlan(blank);
-      const created = { id: res.id, nodes: [] } as any;
-      setPlanInput(JSON.stringify(created, null, 2));
-      await refreshPlans();
-    } catch (e) {
-      setPlansError((e as Error).message);
-    }
-  }, [refreshPlans]);
-
-  const handlePlanDelete = useCallback(async () => {
-    try {
-      const obj = planInput.trim() ? JSON.parse(planInput) : null;
-      const id = obj?.id ? String(obj.id) : null;
-      if (!id) {
-        setPlanInput('');
-        return;
-      }
-      await deletePlan(id);
-      setPlanInput('');
-      setSelectedNodeId(null);
-      await refreshPlans();
-    } catch (e) {
-      setPlansError((e as Error).message);
-    }
-  }, [planInput, refreshPlans]);
+  // 计划创建/删除操作由 PlanListPanel 内部提供，避免在此重复定义未使用的处理函数
 
   const handlePlanUpload = useCallback(async (files: File[]) => {
     try {
@@ -316,28 +318,13 @@ function DashboardCore({
   return (
     <div className="space-y-4">
       {storeError && (
-        <div className="alert alert-error text-sm">
+        <div className="alert alert-error text-sm" role="alert" aria-live="polite">
           <span>{storeError}</span>
         </div>
       )}
 
-      {/* 顶部：调度摘要卡片 + 模式切换 */}
+      {/* 顶部：工作模式优先，其次调度摘要 */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="stat bg-base-200/60 border border-base-content/10">
-          <div className="stat-title">调度总数</div>
-          <div className="stat-value text-lg">{schedules.length}</div>
-          <div className="stat-desc text-xs">来源：repo/config</div>
-        </div>
-        <div className="stat bg-base-200/60 border border-base-content/10">
-          <div className="stat-title">最近一次执行</div>
-          <div className="stat-value text-lg">{(() => {
-            const sorted = schedules
-              .map(s => s.lastRun?.finishedAt || s.lastRun?.startedAt)
-              .filter(Boolean) as string[];
-            return sorted.length ? sorted.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] : '-';
-          })()}</div>
-          <div className="stat-desc text-xs">点击 Schedules 查看详情</div>
-        </div>
         <div className="stat bg-base-200/60 border border-base-content/10">
           <div className="stat-title">工作模式</div>
           <div className="stat-value text-lg">
@@ -356,6 +343,7 @@ function DashboardCore({
               >
                 监控
               </button>
+
             </div>
           </div>
           <div className="stat-desc text-xs">编辑器已并入 Dashboard</div>
@@ -369,11 +357,12 @@ function DashboardCore({
         className="min-h-[70vh] rounded-lg border border-base-300/50 bg-base-100/60"
       >
         {/* 左侧：计划列表 - 使用统一组件 */}
-        <Panel defaultSize={22} minSize={18} maxSize={30} order={1} id="plan-list-panel" className="p-3 overflow-auto">
+        <Panel defaultSize={22} minSize={18} maxSize={30} order={1} id="plan-list-panel" className="p-3 h-full overflow-hidden">
           <PlanListPanel
             plans={plans}
             loading={plansLoading}
             error={plansError}
+            onRefresh={refreshPlans}
             onImportExamples={handleImportExamples}
             onUpload={handlePlanUpload}
             onOpen={handlePlanOpen}
@@ -385,9 +374,9 @@ function DashboardCore({
           style={{ touchAction: 'none' }}
         />
 
-        {/* 右侧：编辑器或监控视图 */}
+        {/* 右侧：主内容区（四模式） */}
         <Panel defaultSize={78} minSize={70} order={2} id="main-content-panel" className="overflow-hidden">
-          {activeTab === 'editor' ? (
+          {activeTab === 'editor' && (
             <EditorView
               planInput={planInput}
               selectedNodeId={selectedNodeId}
@@ -404,7 +393,8 @@ function DashboardCore({
               onRefreshPlans={refreshPlans}
               onRefreshExecutions={refreshExecutions}
             />
-          ) : (
+          )}
+          {activeTab === 'monitor' && (
             <MonitorView
               executions={storeExecutions}
               execLoading={storeLoading}
@@ -418,10 +408,15 @@ function DashboardCore({
               onApprove={handleApprove}
               onReject={handleReject}
               onFocusNode={setSelectedNodeId}
+              onOpenExecution={(id)=> setSelectedExecutionId(id)}
             />
           )}
+
         </Panel>
       </PanelGroup>
+
+      {/* 执行详情抽屉：对话框形式，Esc/Backdrop 可关闭 */}
+      <ExecutionDetailsDrawer executionId={selectedExecutionId} onClose={()=> setSelectedExecutionId(null)} />
     </div>
   );
 }

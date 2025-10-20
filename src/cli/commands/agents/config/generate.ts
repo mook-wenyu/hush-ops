@@ -8,11 +8,11 @@ import {
 } from "../../../agent-config.js";
 
 export default class AgentConfigGenerate extends Command {
-  static summary = "生成或预览智能体配置 JSON";
+  static override summary = "生成或预览智能体配置 JSON";
 
-  static description = "根据提供的参数生成智能体配置 JSON，支持 dry-run 预览或写入 .hush-ops/config/agents/";
+  static override description = "根据提供的参数生成智能体配置 JSON，支持 dry-run 预览或写入 .hush-ops/config/agents/";
 
-  static flags = {
+  static override flags = {
     id: Flags.string({ description: "配置 ID", required: true }),
     module: Flags.string({ description: "模块路径", required: true }),
     "register-export": Flags.string({ description: "register 函数导出名" }),
@@ -30,7 +30,7 @@ export default class AgentConfigGenerate extends Command {
     "dry-run": Flags.boolean({ description: "仅输出 JSON，不写入文件" })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { flags } = await this.parse(AgentConfigGenerate);
     try {
       const jsonRegisterOptions = parseJsonOption(flags["register-options"], "register-options");
@@ -38,28 +38,28 @@ export default class AgentConfigGenerate extends Command {
       const jsonRunOptions = parseJsonOption(flags["run-options"], "run-options");
       const metadataTags = parseTags(flags.tags);
 
-      const result = await generateConfig({
+      const meta: { label?: string; description?: string; tags?: string[] } = {};
+      if (typeof flags.label === 'string') meta.label = flags.label;
+      if (typeof flags.description === 'string') meta.description = flags.description;
+      if (metadataTags && metadataTags.length) meta.tags = metadataTags;
+
+      const opts: any = {
         id: flags.id,
         modulePath: flags.module,
-        registerExport: flags["register-export"],
-        ensureExport: flags["ensure-export"],
-        registerOptions: jsonRegisterOptions,
-        defaultAgentOptions: jsonAgentOptions,
-        defaultRunOptions: jsonRunOptions,
-        metadata:
-          flags.label || flags.description || metadataTags
-            ? {
-                label: flags.label,
-                description: flags.description,
-                tags: metadataTags
-              }
-            : undefined,
+        metadata: Object.keys(meta).length ? meta : undefined,
         configVersion: flags["config-version"],
-        directory: flags.directory,
-        output: flags.output,
-        dryRun: flags["dry-run"],
-        force: flags.force
-      });
+        force: !!flags.force
+      };
+      if (flags["register-export"]) opts.registerExport = flags["register-export"];
+      if (flags["ensure-export"]) opts.ensureExport = flags["ensure-export"];
+      if (jsonRegisterOptions) opts.registerOptions = jsonRegisterOptions;
+      if (jsonAgentOptions) opts.defaultAgentOptions = jsonAgentOptions;
+      if (jsonRunOptions) opts.defaultRunOptions = jsonRunOptions;
+      if (flags.directory) opts.directory = flags.directory;
+      if (flags.output) opts.output = flags.output;
+      if (typeof flags["dry-run"] !== "undefined") opts.dryRun = flags["dry-run"];
+
+      const result = await generateConfig(opts);
 
       if (flags["dry-run"]) {
         this.log(result);

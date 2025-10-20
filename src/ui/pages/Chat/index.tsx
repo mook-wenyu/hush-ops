@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAgentThread, sendAgentMessage, clearAgentThread, buildAgentExportUrl } from "../../services/agents";
 
 export default function ChatPage() {
@@ -8,13 +8,15 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  async function refresh(limit?: number) {
-    const res = await getAgentThread({ sessionKey, limit });
+  const refresh = useCallback(async (limit?: number) => {
+    const params: any = { sessionKey };
+    if (typeof limit === "number") params.limit = limit;
+    const res = await getAgentThread(params);
     setMessages(res.messages || []);
     requestAnimationFrame(() => listRef.current?.scrollTo({ top: 999999, behavior: "smooth" }));
-  }
+  }, [sessionKey]);
 
-  useEffect(() => { refresh(50); }, [sessionKey]);
+  useEffect(() => { refresh(50); }, [refresh]);
 
   async function onSend(e?: React.FormEvent) {
     e?.preventDefault();

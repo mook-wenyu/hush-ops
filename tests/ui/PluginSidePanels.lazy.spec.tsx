@@ -39,9 +39,6 @@ vi.mock("../../src/ui/components/ExecutionList", () => ({
 vi.mock("../../src/ui/components/PendingApprovals", () => ({
   PendingApprovals: () => <div data-testid="pending-approvals" />
 }));
-vi.mock("../../src/ui/components/PlanActions", () => ({
-  PlanActions: () => <div data-testid="plan-actions" />
-}));
 vi.mock("../../src/ui/components/PlanNodeEditor", () => ({
   PlanNodeEditor: () => <div data-testid="plan-node-editor" />
 }));

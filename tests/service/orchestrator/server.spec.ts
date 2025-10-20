@@ -1,4 +1,4 @@
-import { AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

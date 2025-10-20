@@ -14,28 +14,31 @@ export function registerAgentRoutes(app: any, basePath: string, controller?: Orc
       userInput: message,
       onToolEvent: async (ev) => {
         try {
-          controller?.appendGlobalToolStreamChunk({
+          const chunk: any = {
             correlationId: `agents:${sessionKey}:auto`,
             toolName: ev.toolName,
             message: ev.message ?? "",
             status: ev.status,
-            error: ev.error,
-            source: "agent",
-            timestamp: ev.timestamp
-          });
+            source: "agent"
+          };
+          if (ev.error) chunk.error = ev.error;
+          if (ev.timestamp) chunk.timestamp = ev.timestamp;
+          controller?.appendGlobalToolStreamChunk(chunk);
         } catch {}
       }
     });
     // 将对话结果作为工具流审计的最小事件写入（全局，无 executionId）
     try {
-      controller?.appendGlobalToolStreamChunk({
+      const chunk: any = {
         correlationId: `agents:${sessionKey}`,
         toolName: "agent.message",
         message: String(result.reply?.content ?? ""),
         status: "success",
-        source: "agent",
-        timestamp: result.reply?.ts ?? new Date().toISOString()
-      });
+        source: "agent"
+      };
+      const ts = result.reply?.ts ?? new Date().toISOString();
+      if (ts) chunk.timestamp = ts as string;
+      controller?.appendGlobalToolStreamChunk(chunk);
     } catch {}
     return { ok: true, sessionKey: result.sessionKey, reply: result.reply, thread: result.thread };
   });
@@ -93,18 +96,13 @@ export function registerAgentRoutes(app: any, basePath: string, controller?: Orc
     const status = body.status || "start";
     const message = String(body.message ?? "");
     try {
-      controller?.appendGlobalToolStreamChunk({
-        correlationId,
-        toolName,
-        status,
-        message,
-        error: body.error,
-        executionId: body.executionId,
-        nodeId: body.nodeId,
-        planId: body.planId,
-        source: body.source ?? "agent",
-        timestamp: body.timestamp
-      });
+      const chunk: any = { correlationId, toolName, status, message, source: body.source ?? "agent" };
+      if (body.error) chunk.error = body.error;
+      if (body.executionId) chunk.executionId = body.executionId;
+      if (body.nodeId) chunk.nodeId = body.nodeId;
+      if (body.planId) chunk.planId = body.planId;
+      if (body.timestamp) chunk.timestamp = body.timestamp;
+      controller?.appendGlobalToolStreamChunk(chunk);
       return { ok: true, correlationId };
     } catch (error: any) {
       return { ok: false, error: { message: error?.message ?? String(error) } };
@@ -122,27 +120,30 @@ export function registerAgentRoutes(app: any, basePath: string, controller?: Orc
       userInput: content,
       onToolEvent: async (ev) => {
         try {
-          controller?.appendGlobalToolStreamChunk({
+          const chunk: any = {
             correlationId: `agents:${sessionKey}:auto`,
             toolName: ev.toolName,
             message: ev.message ?? "",
             status: ev.status,
-            error: ev.error,
-            source: "chatkit",
-            timestamp: ev.timestamp
-          });
+            source: "chatkit"
+          };
+          if (ev.error) chunk.error = ev.error;
+          if (ev.timestamp) chunk.timestamp = ev.timestamp;
+          controller?.appendGlobalToolStreamChunk(chunk);
         } catch {}
       }
     });
     try {
-      controller?.appendGlobalToolStreamChunk({
+      const chunk: any = {
         correlationId: `agents:${sessionKey}`,
         toolName: "agent.message",
         message: String(result.reply?.content ?? ""),
         status: "success",
-        source: "chatkit",
-        timestamp: result.reply?.ts ?? new Date().toISOString()
-      });
+        source: "chatkit"
+      };
+      const ts = result.reply?.ts ?? new Date().toISOString();
+      if (ts) chunk.timestamp = ts as string;
+      controller?.appendGlobalToolStreamChunk(chunk);
     } catch {}
     return {
       events: [

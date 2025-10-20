@@ -130,20 +130,21 @@ function normaliseServers(payload: z.infer<typeof ConfigSchema>): Map<string, Mc
       if (map.has(item.name)) {
         throw new Error(`检测到重复的 MCP server name：${item.name}`);
       }
-      map.set(item.name, {
+      const base: McpServerConfig = {
         name: item.name,
-        endpoint: item.endpoint,
-        description: item.description,
-        command: item.command,
-        args: item.args,
-        env: item.env,
-        workingDirectory: item.workingDirectory,
-        autoStart: item.autoStart,
-        headers: item.headers,
-        capabilities: item.capabilities,
-        retry: item.retry ?? undefined,
-        session: item.session ?? undefined
-      });
+        endpoint: item.endpoint
+      } as McpServerConfig;
+      if (item.description) (base as any).description = item.description;
+      if (item.command) (base as any).command = item.command;
+      if (item.args) (base as any).args = item.args;
+      if (item.env) (base as any).env = item.env;
+      if (item.workingDirectory) (base as any).workingDirectory = item.workingDirectory;
+      if (typeof item.autoStart === "boolean") (base as any).autoStart = item.autoStart;
+      if (item.headers) (base as any).headers = item.headers;
+      if (item.capabilities) (base as any).capabilities = item.capabilities;
+      if (item.retry) (base as any).retry = item.retry;
+      if (item.session) (base as any).session = item.session;
+      map.set(item.name, base);
     }
     return map;
   }
@@ -152,20 +153,21 @@ function normaliseServers(payload: z.infer<typeof ConfigSchema>): Map<string, Mc
     if (map.has(name)) {
       throw new Error(`检测到重复的 MCP server name：${name}`);
     }
-    map.set(name, {
+    const base: McpServerConfig = {
       name,
-      endpoint: item.endpoint,
-      description: item.description,
-      command: item.command,
-      args: item.args,
-      env: item.env,
-      workingDirectory: item.workingDirectory,
-      autoStart: item.autoStart,
-      headers: item.headers,
-      capabilities: item.capabilities,
-      retry: item.retry ?? undefined,
-      session: item.session ?? undefined
-    });
+      endpoint: item.endpoint
+    } as McpServerConfig;
+    if (item.description) (base as any).description = item.description;
+    if (item.command) (base as any).command = item.command;
+    if (item.args) (base as any).args = item.args;
+    if (item.env) (base as any).env = item.env;
+    if (item.workingDirectory) (base as any).workingDirectory = item.workingDirectory;
+    if (typeof item.autoStart === "boolean") (base as any).autoStart = item.autoStart;
+    if (item.headers) (base as any).headers = item.headers;
+    if (item.capabilities) (base as any).capabilities = item.capabilities;
+    if (item.retry) (base as any).retry = item.retry;
+    if (item.session) (base as any).session = item.session;
+    map.set(name, base);
   }
   return map;
 }

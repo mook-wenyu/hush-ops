@@ -12,6 +12,17 @@ async function check() {
   });
 }
 
+async function pingBackendHealth(){
+  return new Promise((resolve)=>{
+    const req = http.get('http://127.0.0.1:3000/api/v1/status', (res)=>{
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', ()=> resolve(false));
+    req.setTimeout(2000, ()=>{ try{ req.destroy(); } catch{} resolve(false); });
+    req.end();
+  });
+}
+
 async function main(){
   const preview = spawn(process.platform === 'win32' ? 'cmd' : 'bash',
     process.platform === 'win32'
@@ -36,6 +47,14 @@ async function main(){
     process.exit(1);
   }
   console.log('[smoke] 预览健康检查通过');
+
+  // 轻量尝试后端健康（非阻断）
+  const backendOk = await pingBackendHealth();
+  if (backendOk) {
+    console.log('[smoke] 后端健康检查通过');
+  } else {
+    console.log('[smoke] 后端未运行或未通过健康检查（忽略，仅提示）');
+  }
 }
 
 main().catch((e)=>{ console.error(e); process.exit(1); });

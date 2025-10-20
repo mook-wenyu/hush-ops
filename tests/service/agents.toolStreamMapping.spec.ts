@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { createOrchestratorService } from '../../src/service/orchestrator/server.js';
 
 function json(body: any, status = 200) {

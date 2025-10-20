@@ -85,10 +85,10 @@ export class ToolStreamStore {
       storedAt: input.timestamp
     };
     correlation.toolName = input.toolName;
-    correlation.executionId = input.executionId ?? correlation.executionId;
-    correlation.planId = input.planId ?? correlation.planId;
-    correlation.nodeId = input.nodeId ?? correlation.nodeId;
-    correlation.source = input.source ?? correlation.source;
+    if (typeof input.executionId !== "undefined") correlation.executionId = input.executionId;
+    if (typeof input.planId !== "undefined") correlation.planId = input.planId;
+    if (typeof input.nodeId !== "undefined") correlation.nodeId = input.nodeId;
+    if (typeof input.source !== "undefined") correlation.source = input.source;
     correlation.updatedAt = input.timestamp;
     correlation.chunks.push(chunk);
     this.persist();
@@ -110,20 +110,23 @@ export class ToolStreamStore {
   listSummariesAll(executionId?: string): ToolStreamSummary[] {
     const items = Object.values(this.memory.correlations)
       .filter((entry) => (executionId ? entry.executionId === executionId : true))
-      .map((entry) => ({
-        correlationId: entry.correlationId,
-        toolName: entry.toolName,
-        executionId: entry.executionId,
-        planId: entry.planId,
-        nodeId: entry.nodeId,
-        source: entry.source,
-        chunkCount: entry.chunks.length,
-        latestSequence:
-          entry.chunks.length > 0 ? entry.chunks[entry.chunks.length - 1]?.sequence ?? 0 : 0,
-        updatedAt: entry.updatedAt,
-        completed: entry.chunks.some((chunk) => chunk.status === "success" || chunk.status === "error"),
-        hasError: entry.chunks.some((chunk) => chunk.status === "error" || Boolean(chunk.error))
-      }));
+      .map((entry) => {
+        const summary: any = {
+          correlationId: entry.correlationId,
+          toolName: entry.toolName,
+          chunkCount: entry.chunks.length,
+          latestSequence:
+            entry.chunks.length > 0 ? entry.chunks[entry.chunks.length - 1]?.sequence ?? 0 : 0,
+          updatedAt: entry.updatedAt,
+          completed: entry.chunks.some((chunk) => chunk.status === "success" || chunk.status === "error"),
+          hasError: entry.chunks.some((chunk) => chunk.status === "error" || Boolean(chunk.error))
+        };
+        if (entry.executionId) summary.executionId = entry.executionId;
+        if (entry.planId) summary.planId = entry.planId;
+        if (entry.nodeId) summary.nodeId = entry.nodeId;
+        if (entry.source) summary.source = entry.source;
+        return summary as ToolStreamSummary;
+      });
     return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -153,13 +156,13 @@ export class ToolStreamStore {
     const created: StoredCorrelation = {
       correlationId: input.correlationId,
       toolName: input.toolName,
-      executionId: input.executionId,
-      planId: input.planId,
-      nodeId: input.nodeId,
-      source: input.source,
       updatedAt: input.timestamp,
       chunks: []
     };
+    if (input.executionId) created.executionId = input.executionId;
+    if (input.planId) created.planId = input.planId;
+    if (input.nodeId) created.nodeId = input.nodeId;
+    if (input.source) created.source = input.source;
     this.memory.correlations[input.correlationId] = created;
     return created;
   }

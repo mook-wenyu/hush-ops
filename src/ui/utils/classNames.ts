@@ -42,7 +42,7 @@ export function cn(...args: (ClassValue | ClassObject | ClassArray)[]): string {
  * 卡片样式选项
  */
 export interface CardClassesOptions {
-  /** 卡片变体：默认使用base-200，嵌套卡片使用base-300 */
+  /** 卡片变体：默认顶层卡片，嵌套卡片使用 nested */
   variant?: 'default' | 'nested';
   /** 是否带边框 */
   bordered?: boolean;
@@ -52,20 +52,27 @@ export interface CardClassesOptions {
 
 /**
  * 卡片样式组合函数
- * 基于DaisyUI的card组件，遵循DESIGN_GUIDE规范
+ * 基于DaisyUI的card组件，遵循极简化视觉设计
+ *
+ * 设计策略：
+ * - 顶层卡片：微妙阴影 (shadow-sm)，创造轻微深度感
+ * - 嵌套卡片：边框区分，无阴影，避免视觉噪音
+ * - 背景色：纯色，无透明度，清晰层级
  *
  * @example
- * cardClasses() // 'card bg-base-200/70 shadow-xl'
- * cardClasses({ variant: 'nested' }) // 'card bg-base-300/70 shadow-xl'
- * cardClasses({ bordered: true }) // 'card bg-base-200/70 border border-base-content/10'
+ * cardClasses() // 'card bg-base-200 shadow-sm'
+ * cardClasses({ variant: 'nested' }) // 'card bg-base-100 border border-base-content/10'
+ * cardClasses({ bordered: true }) // 'card bg-base-200 border border-base-content/10'
  */
 export function cardClasses(options: CardClassesOptions = {}): string {
   const { variant = 'default', bordered = false } = options;
   // compact参数暂未实现，保留在接口定义中供未来使用
 
   const baseClasses = 'card';
-  const bgClass = variant === 'nested' ? 'bg-base-300/70' : 'bg-base-200/70';
-  const shadowOrBorder = bordered ? 'border border-base-content/10' : 'shadow-xl';
+  const bgClass = variant === 'nested' ? 'bg-base-100' : 'bg-base-200';
+  const shadowOrBorder = bordered ? 'border border-base-content/10' :
+                         variant === 'nested' ? 'border border-base-content/10' :
+                         'shadow-sm';
 
   return cn(baseClasses, bgClass, shadowOrBorder);
 }
@@ -73,18 +80,22 @@ export function cardClasses(options: CardClassesOptions = {}): string {
 /**
  * 卡片body样式组合函数
  *
+ * 设计策略：
+ * - 标准模式：p-4 (16px) 留白，space-y-4 (16px) 元素间距
+ * - 紧凑模式：p-4 保持不变，space-y-3 (12px) 略紧凑
+ *
  * @example
- * cardBodyClasses() // 'card-body space-y-4'
- * cardBodyClasses({ compact: true }) // 'card-body space-y-2 p-4 text-sm'
+ * cardBodyClasses() // 'card-body p-4 space-y-4'
+ * cardBodyClasses({ compact: true }) // 'card-body p-4 space-y-3 text-sm'
  */
 export function cardBodyClasses(options: CardClassesOptions = {}): string {
   const { compact = false } = options;
 
   if (compact) {
-    return 'card-body space-y-2 p-4 text-sm';
+    return 'card-body p-4 space-y-3 text-sm';
   }
 
-  return 'card-body space-y-4';
+  return 'card-body p-4 space-y-4';
 }
 
 /**

@@ -1,4 +1,4 @@
-import { AddressInfo } from "node:net";
+import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 
 import { execa } from "execa";

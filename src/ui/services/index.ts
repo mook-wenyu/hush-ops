@@ -14,19 +14,19 @@ export {
 } from "./tool-streams.js";
 
 // 分域：Executions
-export { fetchExecutions, fetchExecutionById, stopExecution } from "./executions.js";
+export { fetchExecutions, fetchExecutionById, fetchExecutionHistory, buildExecutionsExportUrl, stopExecution } from "./executions.js";
 
 // 基础：HTTP 工具（按需暴露）
 export { getBaseUrl, requestJson, HTTPError, TimeoutError, AbortRequestError } from "./core/http.js";
 
-// 新分域：Plans / Designer / Approvals / MCP / FS / Schedules / Realtime
+// 新分域：Plans / Designer / Approvals / MCP / FS / Schedules / Realtime (Schedules 已实现)
 export { fetchPlans, fetchPlanById, createPlan, updatePlan, deletePlan, uploadPlanFiles, fetchExamplePlans, importExamplePlan, dryRunPlan, executePlan, executePlanById } from "./plans.js";
 export { compileGraph, simulateDryRun } from "./designer.js";
 export { requestApproval, submitApprovalDecision } from "./approvals.js";
 export { fetchMcpServers, fetchMcpTools, callMcpTool } from "./mcp.js";
 export type { McpServerSummary } from "./mcp.js";
 export { fsList, fsRead, fsWrite, fsMkdir, fsMove, fsDelete } from "./fs.js";
-export { fetchSchedules, reloadSchedules } from "./schedules.js";
+export { fetchSchedules } from "./schedules.js";
 export type { ScheduleItem } from "./schedules.js";
 export { createWebSocket } from "./realtime.js";
 

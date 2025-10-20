@@ -1,6 +1,6 @@
 import { getBaseUrl } from "./core/http";
 
-export function createWebSocket(topics: string[]): WebSocket {
+export function createWebSocket(topics: readonly string[]): WebSocket {
   const baseUrl = getBaseUrl();
   const wsUrl = new URL(baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";

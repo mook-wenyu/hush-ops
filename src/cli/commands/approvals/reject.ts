@@ -10,15 +10,15 @@ import { joinStatePath } from "../../../shared/environment/pathResolver.js";
 const DEFAULT_APPROVAL_DIRECTORY = joinStatePath("approvals");
 
 export default class ApprovalsReject extends Command {
-  static summary = "将待审批项标记为拒绝";
+  static override summary = "将待审批项标记为拒绝";
 
-  static description = "记录审批拒绝并阻止节点继续执行。";
+  static override description = "记录审批拒绝并阻止节点继续执行。";
 
-  static args = {
+  static override args = {
     id: Args.string({ description: "审批 ID", required: true })
   } as const;
 
-  static flags = {
+  static override flags = {
     database: Flags.string({
       description: `指定审批存储目录（默认 ${DEFAULT_APPROVAL_DIRECTORY}）`
     }),
@@ -27,9 +27,11 @@ export default class ApprovalsReject extends Command {
     })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { args, flags } = await this.parse(ApprovalsReject);
-    const store = createApprovalStore({ databasePath: flags.database });
+    const store = createApprovalStore(
+      flags.database ? { databasePath: flags.database } : {}
+    );
     const controller = createApprovalController(store);
 
     try {

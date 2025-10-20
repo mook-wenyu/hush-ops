@@ -26,14 +26,15 @@ function createMcpToolAdapter(session: BridgeSession): PlanNodeAdapter<Extract<P
   return {
     type: "mcp_tool",
     async execute(node, ctx) {
-      const response = await session.invokeTool({
+      const payload: any = {
         toolName: node.toolName,
-        arguments: node.arguments as Record<string, unknown> | undefined,
         options: {
           nodeId: node.id,
           riskLevel: node.riskLevel
         }
-      });
+      };
+      if (typeof node.arguments !== "undefined") payload.arguments = node.arguments as Record<string, unknown>;
+      const response = await session.invokeTool(payload);
       ctx.sharedState.set(`${node.id}.output`, response);
       const result: ExecuteResult = {
         nodeId: node.id,

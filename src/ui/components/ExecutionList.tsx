@@ -6,6 +6,7 @@ interface ExecutionListProps {
   executions: ExecutionRecord[];
   onRefresh: () => void;
   onStop?: (id: string) => void;
+  onOpenDetails?: (id: string) => void;
   loading: boolean;
   disabled: boolean;
   stopProcessingId?: string | null;
@@ -23,6 +24,7 @@ export function ExecutionList({
   executions,
   onRefresh,
   onStop,
+  onOpenDetails,
   loading,
   disabled,
   stopProcessingId
@@ -33,7 +35,7 @@ export function ExecutionList({
         <div className="flex items-center justify-between gap-3">
           <h2 className="card-title text-lg">执行列表</h2>
           <button
-            className="btn btn-outline btn-xs"
+            className="btn btn-outline btn-xs min-h-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus:outline-offset-2"
             type="button"
             onClick={onRefresh}
             disabled={loading || disabled}
@@ -63,11 +65,11 @@ export function ExecutionList({
                   {execution.error?.message && (
                     <div className="text-error">错误：{execution.error.message}</div>
                   )}
-                  {onStop && !disabled && execution.status === "running" && (
-                    <div className="pt-2">
+                  <div className="pt-2 flex items-center gap-2">
+                    {onStop && !disabled && execution.status === "running" && (
                       <button
                         type="button"
-                        className={cn('btn btn-outline btn-error btn-xs', {
+                        className={cn('btn btn-outline btn-error btn-xs min-h-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus:outline-offset-2', {
                           'btn-disabled': disabled || stopProcessingId === execution.id
                         })}
                         onClick={() => onStop(execution.id)}
@@ -75,8 +77,17 @@ export function ExecutionList({
                       >
                         {stopProcessingId === execution.id ? "停止中…" : "停止执行"}
                       </button>
-                    </div>
-                  )}
+                    )}
+                    {onOpenDetails && (
+                      <button
+                        type="button"
+                        className="btn btn-xs min-h-6 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus:outline-offset-2"
+                        onClick={() => onOpenDetails(execution.id)}
+                      >
+                        详情
+                      </button>
+                    )}
+                  </div>
                 </div>
               </article>
             ))}

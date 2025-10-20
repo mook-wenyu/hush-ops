@@ -1,24 +1,39 @@
 .planNode {
-  background: rgba(19, 22, 30, 0.9);
-  border: 1px solid rgba(92, 102, 122, 0.35);
+  /* 仅保留节点本身的基本样式 */
+  background: oklch(var(--b2));
+  border: 1px solid oklch(var(--bc) / 0.15);
   border-radius: 14px;
   padding: 16px;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
-  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
 }
+
+/* 节点状态样式 */
 .planNode.pending {
-  border-color: var(--color-brand-warning);
-  box-shadow: 0 10px 26px rgba(255, 216, 89, 0.24);
+  border-color: oklch(var(--wa));
+  box-shadow: 0 10px 22px rgba(255, 216, 89, 0.18);
 }
+
 .planNode.active {
-  border-color: var(--color-brand);
-  box-shadow: 0 14px 32px rgba(140, 75, 255, 0.35);
+  border-color: oklch(var(--p));
+  box-shadow: 0 12px 24px rgba(140, 75, 255, 0.22);
 }
+
 .planNode.completed {
-  border-color: var(--color-brand-accent);
-  box-shadow: 0 12px 26px rgba(56, 201, 93, 0.28);
+  border-color: oklch(var(--s));
+  box-shadow: 0 10px 22px rgba(56, 201, 93, 0.20);
 }
+
 .planNode.selected {
-  border-color: rgba(255, 255, 255, 0.6);
-  box-shadow: 0 12px 28px rgba(116, 205, 255, 0.32);
+  border-color: oklch(var(--bc) / 0.35);
+  box-shadow: 0 12px 26px rgba(116, 205, 255, 0.22);
 }
+
+/* 孤立节点样式 */
+.planNode.orphaned {
+  border: 2px dashed #f59e0b;
+  background: #fffbeb;
+  opacity: 0.85;
+  box-shadow: 0 10px 22px rgba(245, 158, 11, 0.18);
+}
+
+

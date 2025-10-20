@@ -1,38 +1,36 @@
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, useDeferredValue } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
 // 使用自定义样式替代库内置样式（避免构建导出不兼容）
 
 import { BridgeStatus } from "./components/BridgeStatus";
 import { ExecutionList } from "./components/ExecutionList";
 import { PendingApprovals } from "./components/PendingApprovals";
-import { PlanActions } from "./components/PlanActions";
+
 import { PlanNodeEditor } from "./components/PlanNodeEditor";
+import { TOPICS } from "./app/constants";
+import { type RuntimeSnapshot, type RuntimeExecutionStatus, isRuntimeExecutionStatus } from "./app/types";
+import { normalizeErrorMessage } from "./app/utils";
+import { cardClasses } from "./utils/classNames";
+import {
+  useExecutionsSync,
+  useMcpServerManagement,
+  usePlanManagement,
+  useApprovalManagement
+} from "./app/hooks";
 // P2: 插件侧栏惰性加载（仅在显式打开时挂载）
 const PluginSidePanelsLazy = lazy(() =>
   import("./components/PluginSidePanels").then((m) => ({ default: m.PluginSidePanels }))
 );
-import {
-  PlanCanvas,
-  type PlanJson,
-  type PlanNodeJson,
-  type PlanNodePositionUpdate
-} from "./components/graph/PlanCanvas";
+import { PlanCanvas } from "./components/graph/PlanCanvas";
 import { PluginRuntimeProvider, type PluginRuntime, type PluginToolStreamEvent } from "./plugins/runtime";
 import { isPluginsDisabled } from "./utils/plugins";
 import {
-  dryRunPlan,
-  executePlan,
-  fetchExecutions,
-  stopExecution,
-  submitApprovalDecision,
   fetchMcpTools,
   callMcpTool,
   requestApproval,
   fetchExecutionToolStreamSummaries,
   fetchExecutionToolStreamChunks,
-  replayExecutionToolStream,
-  fetchMcpServers,
-  type McpServerSummary
+  replayExecutionToolStream
 } from "./services";
 import {
   useBridgeConnection,
@@ -41,74 +39,16 @@ import {
 } from "./hooks/useBridgeConnection";
 import {
   appStore,
-  selectApprovalCommentDrafts,
-  selectApprovalProcessingIds,
-  selectExecutionsError,
-  selectExecutionsList,
-  selectExecutionsLoading,
-  selectPendingApprovalsList,
   useAppStoreFeatureFlag,
   useAppStoreSelector
 } from "./state/appStore";
 import type {
   BridgeState,
-  ExecutionRecord,
   ExecutionSnapshot,
   OrchestratorEventEnvelope,
   PendingApprovalEntry,
   RuntimeToolStreamPayload
 } from "./types/orchestrator";
-import { updatePlanInputWithNodePositions } from "./utils/planTransforms";
-
-const TOPICS = ["runtime", "bridge", "execution", "approvals"];
-
-const RUNTIME_EXECUTION_STATUSES = [
-  "idle",
-  "pending",
-  "running",
-  "success",
-  "failed",
-  "cancelled"
-] as const;
-
-type RuntimeExecutionStatus = (typeof RUNTIME_EXECUTION_STATUSES)[number];
-
-interface RuntimeSnapshot {
-  readonly planId: string | null;
-  readonly executionStatus: RuntimeExecutionStatus;
-  readonly running: boolean;
-  readonly currentNodeId: string | null;
-  readonly completedNodeIds: ReadonlySet<string>;
-  readonly pendingNodeIds: ReadonlySet<string>;
-}
-
-function isRuntimeExecutionStatus(value: string): value is RuntimeExecutionStatus {
-  return (RUNTIME_EXECUTION_STATUSES as readonly string[]).includes(value);
-}
-
-function extractPending(entries: ExecutionRecord[]): ExecutionRecord["pendingApprovals"] {
-  return entries.flatMap((execution) => execution.pendingApprovals);
-}
-
-function normalizeErrorMessage(input: unknown, fallback: string): string {
-  if (!input) {
-    return fallback;
-  }
-  if (typeof input === "string") {
-    return input;
-  }
-  if (typeof input === "object") {
-    const candidate = input as { message?: unknown };
-    if (typeof candidate.message === "string") {
-      return candidate.message;
-    }
-  }
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return String(input);
-  }
-}
 
 export function App() {
   // 挂载就绪标记：供 e2e/a11y 用例等待 React 完整挂载
@@ -117,17 +57,9 @@ export function App() {
     return () => { try { document.documentElement.removeAttribute('data-app-mounted'); } catch {} };
   }, []);
 
-
   const storeEnabled = useAppStoreFeatureFlag();
-  const storeExecutions = useAppStoreSelector(selectExecutionsList);
-  const storeExecutionsLoading = useAppStoreSelector(selectExecutionsLoading);
-  const storeExecutionsError = useAppStoreSelector(selectExecutionsError);
-  const storePendingApprovals = useAppStoreSelector(selectPendingApprovalsList);
-  const storeApprovalCommentDrafts = useAppStoreSelector(selectApprovalCommentDrafts);
-  const storeProcessingIds = useAppStoreSelector(selectApprovalProcessingIds);
   const storeBridgeState = useAppStoreSelector((state) => state.runtime.bridgeState);
   const storeRuntimeSnapshot = useAppStoreSelector((state) => state.runtime.snapshot);
-  const storeMcpConfig = useAppStoreSelector((state) => state.mcpConfig);
 
   const runStoreMutation = useCallback(
     (mutator: () => void) => {
@@ -141,21 +73,68 @@ export function App() {
     [storeEnabled]
   );
 
-  const [executions, setExecutions] = useState<ExecutionRecord[]>([]);
+  // ========== 使用提取的 Hooks ==========
+
+  // 执行列表同步
+  const {
+    executions,
+    loading: executionsLoading,
+    error: executionsError,
+    stopProcessingId,
+    refreshExecutions,
+    stopExecutionById,
+    scheduleRefresh: scheduleExecutionsRefresh
+  } = useExecutionsSync({ storeEnabled });
+
+  // MCP 服务器管理
+  const {
+    servers: _mcpServers,
+    selectedServer,
+    error: _mcpServerError,
+    updateSelectedServer: _updateSelectedServer
+  } = useMcpServerManagement({ storeEnabled });
+
+  // 计划管理
+  const {
+    planInput: _planInput,
+    parsedPlan,
+    warnings: _planWarnings,
+    message: _planMessage,
+    error: _planError,
+    busy: _planBusy,
+    selectedNodeId: selectedPlanNodeId,
+    updatePlanInput: _updatePlanInput,
+    executeDryRun: _executeDryRun,
+    executePlanAction: _executePlanAction,
+    updateNode: updatePlanNode,
+    updateNodePositions: updatePlanNodePositions,
+    selectNode: setSelectedPlanNodeId
+  } = usePlanManagement({
+    storeEnabled,
+    selectedServer,
+    onExecutionSuccess: refreshExecutions
+  });
+
+  // 审批管理
+  const {
+    comments: approvalComments,
+    processingId: approvalProcessing,
+    updateComment: updateApprovalComment,
+    approve: approveApproval,
+    reject: rejectApproval,
+    focusNode: focusApprovalNode
+  } = useApprovalManagement({
+    storeEnabled,
+    onApprovalSuccess: refreshExecutions,
+    onError: (err) => {
+      // 错误已在 hook 内部处理，这里仅用于可能的额外处理
+      console.error('Approval error:', err);
+    }
+  });
+
+  // ========== 保留的本地状态：运行时快照和桥接状态 ==========
+
   const [bridgeState, setBridgeState] = useState<BridgeState>("connecting");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [planInput, setPlanInput] = useState("");
-  const [planWarnings, setPlanWarnings] = useState<string[]>([]);
-  const [planMessage, setPlanMessage] = useState<string | null>(null);
-  const [planError, setPlanError] = useState<string | null>(null);
-  const [planBusy, setPlanBusy] = useState(false);
-  const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
-  const [selectedServer, setSelectedServer] = useState<string | null>(null);
-  const [mcpServerError, setMcpServerError] = useState<string | null>(null);
-  const [approvalComments, setApprovalComments] = useState<Record<string, string>>({});
-  const [approvalProcessing, setApprovalProcessing] = useState<string | null>(null);
-  const [stopProcessingId, setStopProcessingId] = useState<string | null>(null);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeSnapshot>({
     planId: null,
     executionStatus: "idle",
@@ -164,49 +143,52 @@ export function App() {
     completedNodeIds: new Set(),
     pendingNodeIds: new Set()
   });
-  const [selectedPlanNodeId, setSelectedPlanNodeId] = useState<string | null>(null);
 
-  const effectiveSelectedServer =
-    storeEnabled && storeMcpConfig.selectedName !== null ? storeMcpConfig.selectedName : selectedServer;
+  // ========== MCP Bridge 和插件运行时 ==========
+
+  const pluginRuntimeRef = useRef<PluginRuntime | null>(null);
 
   const mcpBridge = useMemo(
     () => ({
       listTools: async () => {
-        if (!effectiveSelectedServer) {
+        if (!selectedServer) {
           throw new Error("尚未选择 MCP 服务器，请先在计划控制中选择。");
         }
-        return fetchMcpTools(effectiveSelectedServer);
+        return fetchMcpTools(selectedServer);
       },
       callTool: async (toolName: string, input: unknown) => {
-        if (!effectiveSelectedServer) {
+        if (!selectedServer) {
           throw new Error("尚未选择 MCP 服务器，无法调用工具。");
         }
-        return callMcpTool(toolName, input, effectiveSelectedServer);
+        return callMcpTool(toolName, input, selectedServer);
       },
       requestApproval: (payload: Parameters<typeof requestApproval>[0]) => requestApproval(payload),
       listToolStreamSummaries: (executionId: string) => fetchExecutionToolStreamSummaries(executionId),
       fetchToolStreamChunks: async (executionId: string, correlationId: string) => {
         const chunks = await fetchExecutionToolStreamChunks(executionId, correlationId);
-        return chunks.map((chunk) => ({
-          toolName: chunk.toolName,
-          message: chunk.message,
-          timestamp: chunk.timestamp,
-          status: chunk.status,
-          correlationId: chunk.correlationId,
-          executionId: chunk.executionId,
-          planId: chunk.planId,
-          nodeId: chunk.nodeId,
-          error: chunk.error,
-          sequence: chunk.sequence,
-          storedAt: chunk.storedAt,
-          replayed: chunk.replayed ?? false,
-          source: chunk.source
-        }));
+        return chunks.map((chunk) => {
+          const ev: any = {
+            toolName: chunk.toolName,
+            message: chunk.message,
+            timestamp: chunk.timestamp,
+            status: chunk.status,
+            replayed: Boolean(chunk.replayed)
+          };
+          if (chunk.correlationId) ev.correlationId = chunk.correlationId;
+          if (chunk.executionId) ev.executionId = chunk.executionId;
+          if (chunk.planId) ev.planId = chunk.planId;
+          if (chunk.nodeId) ev.nodeId = chunk.nodeId;
+          if (chunk.error) ev.error = chunk.error;
+          if (typeof chunk.sequence === "number") ev.sequence = chunk.sequence;
+          if (chunk.storedAt) ev.storedAt = chunk.storedAt;
+          if (chunk.source) ev.source = chunk.source;
+          return ev as PluginToolStreamEvent;
+        });
       },
       replayToolStream: (executionId: string, correlationId: string) =>
         replayExecutionToolStream(executionId, correlationId)
     }),
-    [effectiveSelectedServer]
+    [selectedServer]
   );
 
   const pluginRuntimeOptions = useMemo(
@@ -218,53 +200,7 @@ export function App() {
     [mcpBridge]
   );
 
-  const refreshTimerRef = useRef<number | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const pluginRuntimeRef = useRef<PluginRuntime | null>(null);
-  const selectedServerRef = useRef<string | null>(null);
-
-  const setExecutionsLoadingState = useCallback(
-    (value: boolean) => {
-      if (storeEnabled) {
-        appStore.getState().setExecutionsLoading(value);
-      }
-      setLoading(value);
-    },
-    [storeEnabled]
-  );
-
-  const setExecutionsErrorState = useCallback(
-    (message: string | null) => {
-      if (storeEnabled) {
-        appStore.getState().setExecutionsError(message);
-      }
-      setError(message);
-    },
-    [storeEnabled]
-  );
-
-  const applyExecutionsData = useCallback(
-    (records: ExecutionRecord[]) => {
-      if (storeEnabled) {
-        runStoreMutation(() => {
-          const api = appStore.getState();
-          api.hydrateExecutions(records);
-          const entries = extractPending(records);
-          api.upsertPendingApprovals(entries);
-          const stateAfterUpdate = appStore.getState();
-          const validIds = new Set(entries.map((entry) => entry.id));
-          Object.keys(stateAfterUpdate.approvals.pendingById).forEach((id) => {
-            if (!validIds.has(id)) {
-              stateAfterUpdate.removePendingApproval(id);
-            }
-          });
-        });
-      } else {
-        setExecutions(records);
-      }
-    },
-    [runStoreMutation, storeEnabled]
-  );
+  // ========== 桥接状态管理 ==========
 
   const applyBridgeState = useCallback(
     (next: BridgeState) => {
@@ -276,200 +212,7 @@ export function App() {
     [storeEnabled]
   );
 
-  const setMcpStatusState = useCallback(
-    (status: "idle" | "loading" | "error") => {
-      if (storeEnabled) {
-        appStore.getState().setMcpStatus(status);
-      }
-    },
-    [storeEnabled]
-  );
-
-  const setMcpErrorState = useCallback(
-    (message: string | null) => {
-      if (storeEnabled) {
-        appStore.getState().setMcpError(message);
-      }
-      setMcpServerError(message);
-    },
-    [storeEnabled]
-  );
-
-  const applyMcpServers = useCallback(
-    (servers: McpServerSummary[]) => {
-      if (storeEnabled) {
-        appStore.getState().hydrateMcpServers(servers, Date.now());
-      }
-      setMcpServers(servers);
-    },
-    [storeEnabled]
-  );
-
-  const updateSelectedServer = useCallback(
-    (next: string | null) => {
-      if (storeEnabled) {
-        appStore.getState().selectMcpServer(next);
-      }
-      setSelectedServer(next);
-      selectedServerRef.current = next;
-    },
-    [storeEnabled]
-  );
-
-  const updateApprovalComment = useCallback(
-    (id: string, value: string) => {
-      if (storeEnabled) {
-        appStore.getState().setApprovalCommentDraft(id, value);
-      }
-      setApprovalComments((prev) => ({
-        ...prev,
-        [id]: value
-      }));
-    },
-    [storeEnabled]
-  );
-
-  const clearApprovalComment = useCallback(
-    (id: string) => {
-      if (storeEnabled) {
-        appStore.setState((state) => {
-          const nextDrafts = { ...state.approvals.commentDrafts };
-          delete nextDrafts[id];
-          return {
-            ...state,
-            approvals: {
-              ...state.approvals,
-              commentDrafts: nextDrafts
-            }
-          };
-        });
-      }
-      setApprovalComments((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    },
-    [storeEnabled]
-  );
-
-  const startApprovalProcessing = useCallback(
-    (id: string) => {
-      if (storeEnabled) {
-        const apiState = appStore.getState();
-        apiState.approvals.processingIds.forEach((existingId) => {
-          if (existingId !== id) {
-            apiState.setApprovalProcessing(existingId, false);
-          }
-        });
-        apiState.setApprovalProcessing(id, true);
-      }
-      setApprovalProcessing(id);
-    },
-    [storeEnabled]
-  );
-
-  const finishApprovalProcessing = useCallback(
-    (id?: string) => {
-      if (storeEnabled) {
-        const apiState = appStore.getState();
-        const targets = id ? [id] : apiState.approvals.processingIds;
-        targets.forEach((target) => {
-          apiState.setApprovalProcessing(target, false);
-        });
-      }
-      setApprovalProcessing(null);
-    },
-    [storeEnabled]
-  );
-
-  const loadExecutions = useCallback(async () => {
-    abortControllerRef.current?.abort();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    setExecutionsLoadingState(true);
-    try {
-      const list = await fetchExecutions(controller.signal);
-      applyExecutionsData(list);
-      setExecutionsErrorState(null);
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        setExecutionsErrorState((err as Error).message ?? "获取执行列表失败");
-      }
-    } finally {
-      setExecutionsLoadingState(false);
-    }
-  }, [applyExecutionsData, setExecutionsErrorState, setExecutionsLoadingState]);
-
-  useEffect(() => {
-    loadExecutions().catch((err) => setExecutionsErrorState((err as Error).message));
-    return () => {
-      abortControllerRef.current?.abort();
-    };
-  }, [loadExecutions, setExecutionsErrorState]);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/plans/demo-mixed.json")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`加载示例计划失败 (${response.status})`);
-        }
-        return response.text();
-      })
-      .then((text) => {
-        if (!cancelled) {
-          setPlanInput(text);
-        }
-      })
-      .catch(() => {
-        // ignore，用户可自行粘贴 Plan
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setMcpStatusState("loading");
-    fetchMcpServers()
-      .then((servers) => {
-        if (cancelled) {
-          return;
-        }
-        applyMcpServers(servers);
-        setMcpErrorState(null);
-        const preferred = storeEnabled ? appStore.getState().mcpConfig.selectedName : selectedServerRef.current;
-        const nextSelection =
-          preferred && servers.some((server) => server.name === preferred)
-            ? preferred
-            : servers[0]?.name ?? null;
-        updateSelectedServer(nextSelection);
-        setMcpStatusState("idle");
-      })
-      .catch((err) => {
-        if (cancelled) {
-          return;
-        }
-        applyMcpServers([]);
-        updateSelectedServer(null);
-        setMcpErrorState((err as Error).message ?? "获取 MCP 服务器配置失败");
-        setMcpStatusState("error");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [applyMcpServers, setMcpErrorState, setMcpStatusState, storeEnabled, updateSelectedServer]);
-
-  const scheduleExecutionsRefresh = useCallback(() => {
-    if (refreshTimerRef.current !== null) {
-      window.clearTimeout(refreshTimerRef.current);
-    }
-    refreshTimerRef.current = window.setTimeout(() => {
-      loadExecutions().catch((err) => setExecutionsErrorState((err as Error).message));
-    }, 250);
-  }, [loadExecutions, setExecutionsErrorState]);
+  // ========== 桥接事件处理 ==========
 
   const handleEnvelope = useCallback(
     (envelope: OrchestratorEventEnvelope) => {
@@ -559,28 +302,24 @@ export function App() {
             : typeof toolPayload?.error === "string"
               ? toolPayload.error
               : "";
-        const toolEvent: PluginToolStreamEvent = {
+        const toolEvent: any = {
           toolName: typeof toolPayload?.toolName === "string" ? toolPayload.toolName : "unknown",
           message: messageValue,
           timestamp: typeof toolPayload?.timestamp === "string" ? toolPayload.timestamp : envelope.timestamp,
-          executionId:
-            typeof toolPayload?.executionId === "string"
-              ? toolPayload.executionId
-              : hasExecutionId
-                ? executionId
-                : undefined,
           status: toolPayload?.status,
-          correlationId: typeof toolPayload?.correlationId === "string" ? toolPayload.correlationId : undefined,
-          nodeId: typeof toolPayload?.nodeId === "string" ? toolPayload.nodeId : undefined,
-          planId: typeof toolPayload?.planId === "string" ? toolPayload.planId : undefined,
-          result: toolPayload?.result,
-          error: typeof toolPayload?.error === "string" ? toolPayload.error : undefined,
-          sequence: typeof toolPayload?.sequence === "number" ? toolPayload.sequence : undefined,
-          storedAt: typeof toolPayload?.storedAt === "string" ? toolPayload.storedAt : undefined,
           replayed: Boolean(toolPayload?.replayed),
           source: typeof toolPayload?.source === "string" ? toolPayload.source : "live"
         };
-        pluginRuntimeRef.current?.notifyBridgeOutput(toolEvent);
+        const execIdVal = typeof toolPayload?.executionId === "string" ? toolPayload.executionId : (hasExecutionId ? executionId : undefined);
+        if (execIdVal) toolEvent.executionId = execIdVal;
+        if (typeof toolPayload?.correlationId === "string") toolEvent.correlationId = toolPayload.correlationId;
+        if (typeof toolPayload?.nodeId === "string") toolEvent.nodeId = toolPayload.nodeId;
+        if (typeof toolPayload?.planId === "string") toolEvent.planId = toolPayload.planId;
+        if (typeof toolPayload?.error === "string") toolEvent.error = toolPayload.error;
+        if (typeof toolPayload?.sequence === "number") toolEvent.sequence = toolPayload.sequence;
+        if (typeof toolPayload?.storedAt === "string") toolEvent.storedAt = toolPayload.storedAt;
+        if (typeof toolPayload?.result !== "undefined") toolEvent.result = toolPayload.result;
+        pluginRuntimeRef.current?.notifyBridgeOutput(toolEvent as PluginToolStreamEvent);
         return;
       }
 
@@ -613,18 +352,19 @@ export function App() {
         };
         if (resultPayload) {
           runStoreMutation(() => {
-            appStore.getState().applyExecutionPatch(executionId, {
+            const patch: any = {
               status: resultPayload.status ?? "success",
               executionStatus: resultPayload.status ?? "success",
               running: false,
-              startedAt: resultPayload.startedAt,
-              finishedAt: resultPayload.finishedAt,
               result: resultPayload.outputs,
-              error: resultPayload.error
-                ? { message: normalizeErrorMessage(resultPayload.error, "执行失败") }
-                : undefined,
               pendingApprovals: []
-            });
+            };
+            if (resultPayload.startedAt) patch.startedAt = resultPayload.startedAt;
+            if (resultPayload.finishedAt) patch.finishedAt = resultPayload.finishedAt;
+            if (resultPayload.error) {
+              patch.error = { message: normalizeErrorMessage(resultPayload.error, "执行失败") };
+            }
+            appStore.getState().applyExecutionPatch(executionId, patch);
           });
         }
         return;
@@ -702,12 +442,18 @@ export function App() {
   const handleSequenceGap = useCallback(
     (info: SequenceGapInfo) => {
       console.warn("检测到事件序列缺口，已触发回退轮询", info);
-      setExecutionsErrorState("检测到桥接事件序列缺口，已触发回退轮询。");
+      try {
+        appStore.getState().setExecutionsError("检测到桥接事件序列缺口，已触发回退轮询。");
+      } catch {
+        // 忽略测试/初始化阶段的极端情况
+      }
     },
-    [setExecutionsErrorState]
+    []
   );
 
-  const handleFallbackPoll = useCallback(() => loadExecutions(), [loadExecutions]);
+  const handleFallbackPoll = useCallback(() => {
+    void refreshExecutions();
+  }, [refreshExecutions]);
 
   const handleBridgeTelemetry = useCallback((event: BridgeTelemetryEvent) => {
     console.debug("[bridge-telemetry]", event);
@@ -723,44 +469,11 @@ export function App() {
     telemetry: handleBridgeTelemetry
   });
 
-  useEffect(() => {
-    return () => {
-      if (refreshTimerRef.current !== null) {
-        window.clearTimeout(refreshTimerRef.current);
-      }
-    };
-  }, []);
-
-  const legacyPendingApprovals = useMemo(() => extractPending(executions), [executions]);
-  const effectiveExecutions = storeEnabled ? storeExecutions : executions;
-  const effectivePendingApprovals = storeEnabled ? storePendingApprovals : legacyPendingApprovals;
-  const pendingNodeIdsFromExecutions = useMemo(() => {
-    const nodes = new Set<string>();
-    effectivePendingApprovals.forEach((entry) => {
-      if (entry.nodeId) {
-        nodes.add(entry.nodeId);
-      }
-    });
-    return nodes;
-  }, [effectivePendingApprovals]);
-  const deferredPlanInput = useDeferredValue(planInput);
-  const parsedPlan = useMemo<PlanJson | null>(() => {
-    if (!deferredPlanInput.trim()) {
-      return null;
-    }
-    try {
-      const candidate = JSON.parse(deferredPlanInput) as PlanJson;
-      if (!candidate || typeof candidate !== "object") {
-        return null;
-      }
-      return candidate;
-    } catch {
-      return null;
-    }
-  }, [deferredPlanInput]);
+  // ========== 计算值 ==========
 
   const parsedPlanId = parsedPlan?.id ?? null;
 
+  // 当计划变更时清除无效的节点选择
   useEffect(() => {
     if (!selectedPlanNodeId) {
       return;
@@ -769,7 +482,8 @@ export function App() {
     if (!exists) {
       setSelectedPlanNodeId(null);
     }
-  }, [parsedPlan, selectedPlanNodeId]);
+  }, [parsedPlan, selectedPlanNodeId, setSelectedPlanNodeId]);
+
   const runtimeSnapshotSource = storeEnabled
     ? {
         planId: storeRuntimeSnapshot.planId,
@@ -780,254 +494,81 @@ export function App() {
         pendingNodeIds: new Set(storeRuntimeSnapshot.pendingNodeIds)
       }
     : runtimeSnapshot;
+
   const runtimePlanId = runtimeSnapshotSource.planId;
   const runtimeCurrentNodeId = runtimeSnapshotSource.currentNodeId;
   const runtimeCompletedNodeIds = runtimeSnapshotSource.completedNodeIds;
   const runtimePendingNodeIds = runtimeSnapshotSource.pendingNodeIds;
   const runtimeExecutionStatus = runtimeSnapshotSource.executionStatus;
+
   const effectiveBridgeState = storeEnabled ? storeBridgeState : bridgeState;
   const actionsDisabled = effectiveBridgeState !== "connected";
-  const effectiveLoading = storeEnabled ? storeExecutionsLoading : loading;
-  const effectiveError = storeEnabled && storeExecutionsError ? storeExecutionsError : error;
-  const effectiveCommentMap =
-    storeEnabled && Object.keys(storeApprovalCommentDrafts).length > 0 ? storeApprovalCommentDrafts : approvalComments;
-  const effectiveProcessingId =
-    storeEnabled && storeProcessingIds.length > 0 ? storeProcessingIds[0] ?? null : approvalProcessing;
-  const effectiveServers = storeEnabled ? storeMcpConfig.servers : mcpServers;
-  const effectiveMcpError = storeEnabled && storeMcpConfig.error ? storeMcpConfig.error : mcpServerError;
+
   const matchingRuntimePlan =
     parsedPlanId !== null && runtimePlanId !== null && runtimePlanId === parsedPlanId;
 
-  const planCanvasPendingNodeIds = useMemo(() => {
-    const nodes = new Set<string>(pendingNodeIdsFromExecutions);
+  // 合并待审批节点 ID（从执行列表 + 运行时快照）
+  const pendingNodeIdsForCanvas = useMemo(() => {
+    const nodes = new Set<string>();
+    executions.forEach((exec) => {
+      exec.pendingApprovals.forEach((approval) => {
+        if (approval.nodeId) {
+          nodes.add(approval.nodeId);
+        }
+      });
+    });
     if (matchingRuntimePlan) {
       runtimePendingNodeIds.forEach((id) => nodes.add(id));
     }
     return nodes;
-  }, [pendingNodeIdsFromExecutions, runtimePendingNodeIds, matchingRuntimePlan]);
+  }, [executions, runtimePendingNodeIds, matchingRuntimePlan]);
+
+  // ========== 简化的事件处理器 ==========
 
   const handleReconnect = useCallback(() => {
     reconnectBridge();
   }, [reconnectBridge]);
 
   const handleRefreshClick = useCallback(() => {
-    loadExecutions().catch((err) => setExecutionsErrorState((err as Error).message));
-  }, [loadExecutions, setExecutionsErrorState]);
-
-  const handleStopExecution = useCallback(
-    async (executionId: string) => {
-      setStopProcessingId(executionId);
-      try {
-        await stopExecution(executionId);
-        if (!storeEnabled) {
-          await loadExecutions();
-        }
-      } catch (err) {
-        setExecutionsErrorState((err as Error).message ?? "停止执行失败");
-      } finally {
-        setStopProcessingId(null);
-      }
-    },
-    [loadExecutions, setExecutionsErrorState, storeEnabled]
-  );
-
-  const handlePlanChange = useCallback((value: string) => {
-    setPlanInput(value);
-    setPlanMessage(null);
-    setPlanError(null);
-  }, []);
-
-  const handleUpdatePlanNode = useCallback(
-    (nodeId: string, updates: Partial<Omit<PlanNodeJson, "id">>) => {
-      setPlanInput((prev) => {
-        if (!prev.trim()) {
-          return prev;
-        }
-        try {
-          const parsed = JSON.parse(prev) as PlanJson;
-          if (!Array.isArray(parsed.nodes)) {
-            return prev;
-          }
-          const index = parsed.nodes.findIndex((node) => node?.id === nodeId);
-          if (index === -1) {
-            return prev;
-          }
-          const nextNodes = [...parsed.nodes];
-          const currentNode = nextNodes[index];
-          if (!currentNode || typeof currentNode.id !== "string") {
-            return prev;
-          }
-          nextNodes[index] = {
-            ...currentNode,
-            ...updates,
-            id: currentNode.id
-          };
-          const nextPlan: PlanJson = {
-            ...parsed,
-            nodes: nextNodes
-          };
-          return JSON.stringify(nextPlan, null, 2);
-        } catch (err) {
-          setPlanError(`更新节点失败：${(err as Error).message}`);
-          return prev;
-        }
-      });
-    },
-    []
-  );
-
-  const handleUpdatePlanNodePositions = useCallback(
-    (updates: readonly PlanNodePositionUpdate[]) => {
-      if (!updates.length) {
-        return;
-      }
-      setPlanInput((prev) => {
-        try {
-          const next = updatePlanInputWithNodePositions(prev, updates);
-          if (next !== prev) {
-            setPlanError(null);
-          }
-          return next;
-        } catch (err) {
-          setPlanError(`更新节点位置失败：${(err as Error).message}`);
-          return prev;
-        }
-      });
-    },
-    [setPlanError]
-  );
-
-
-  const handleDryRun = useCallback(async () => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(planInput);
-    } catch (err) {
-      setPlanError(`Plan JSON 解析失败：${(err as Error).message}`);
-      setPlanWarnings([]);
-      return;
-    }
-    setPlanBusy(true);
-    try {
-      const result = await dryRunPlan(parsed);
-      setPlanWarnings(result.warnings ?? []);
-      setPlanMessage(`Plan ${result.planId ?? "unknown"} dry-run 完成`);
-      setPlanError(null);
-    } catch (err) {
-      setPlanError((err as Error).message ?? "dry-run 失败");
-      setPlanWarnings([]);
-      setPlanMessage(null);
-    } finally {
-      setPlanBusy(false);
-    }
-  }, [planInput]);
-
-  const handleExecute = useCallback(async () => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(planInput);
-    } catch (err) {
-      setPlanError(`Plan JSON 解析失败：${(err as Error).message}`);
-      setPlanWarnings([]);
-      return;
-    }
-    if (!effectiveSelectedServer) {
-      setPlanError("未检测到可用的 MCP 服务器，请先选择配置后再执行。");
-      setPlanWarnings([]);
-      setPlanMessage(null);
-      return;
-    }
-    setPlanBusy(true);
-    try {
-      const result = await executePlan(parsed, effectiveSelectedServer);
-      setPlanMessage(`已提交执行：${result.planId}（状态 ${result.status}）`);
-      setPlanError(null);
-      setPlanWarnings([]);
-      if (!storeEnabled) {
-        await loadExecutions();
-      }
-    } catch (err) {
-      setPlanError((err as Error).message ?? "执行计划失败");
-      setPlanMessage(null);
-    } finally {
-      setPlanBusy(false);
-    }
-  }, [effectiveSelectedServer, loadExecutions, planInput, storeEnabled]);
-
-  const handleApprovalCommentChange = useCallback(
-    (id: string, value: string) => {
-      updateApprovalComment(id, value);
-    },
-    [updateApprovalComment]
-  );
-
-  const handleApprovalDecision = useCallback(
-    async (id: string, decision: "approved" | "rejected") => {
-      startApprovalProcessing(id);
-      try {
-        const comment = storeEnabled
-          ? appStore.getState().approvals.commentDrafts[id] ?? ""
-          : approvalComments[id] ?? "";
-        await submitApprovalDecision(id, decision, comment);
-        clearApprovalComment(id);
-        if (!storeEnabled) {
-          await loadExecutions();
-        }
-      } catch (err) {
-        setExecutionsErrorState((err as Error).message ?? "审批操作失败");
-      } finally {
-        finishApprovalProcessing(id);
-      }
-    },
-    [
-      approvalComments,
-      clearApprovalComment,
-      finishApprovalProcessing,
-      loadExecutions,
-      setExecutionsErrorState,
-      startApprovalProcessing,
-      storeEnabled
-    ]
-  );
+    void refreshExecutions();
+  }, [refreshExecutions]);
 
   const handleStopClick = useCallback(
     (executionId: string) => {
       if (actionsDisabled) {
         return;
       }
-      void handleStopExecution(executionId);
+      void stopExecutionById(executionId);
     },
-    [actionsDisabled, handleStopExecution]
+    [actionsDisabled, stopExecutionById]
   );
 
   const handleApprove = useCallback(
-    (id: string) => handleApprovalDecision(id, "approved"),
-    [handleApprovalDecision]
+    (id: string) => approveApproval(id),
+    [approveApproval]
   );
 
   const handleReject = useCallback(
-    (id: string) => handleApprovalDecision(id, "rejected"),
-    [handleApprovalDecision]
+    (id: string) => rejectApproval(id),
+    [rejectApproval]
   );
 
-  const handleFocusApprovalNode = useCallback((nodeId: string) => {
-    setSelectedPlanNodeId(nodeId);
-  }, []);
+  // ========== UI 渲染 ==========
 
   const pluginsDisabled = isPluginsDisabled();
   const [pluginPanelsOpen, setPluginPanelsOpen] = useState(false);
 
   const mainLayout = (
     <div className="container mx-auto flex flex-col gap-4 p-4 lg:p-6">
-      <div className="card bg-base-300/70 shadow-xl">
+      <div className={cardClasses()}>
         <div className="card-body space-y-2">
           <h1 className="card-title text-2xl font-semibold">hush-ops 控制面板</h1>
           <p className="text-sm text-base-content/70">
             实时监控混合编排执行状态，断线时自动进入只读模式。
           </p>
-          {effectiveError && (
+          {executionsError && (
             <div className="alert alert-error text-sm">
-              <span>错误：{effectiveError}</span>
+              <span>错误：{executionsError}</span>
             </div>
           )}
         </div>
@@ -1040,10 +581,10 @@ export function App() {
           <div className="space-y-3">
             <h2 className="text-sm font-semibold opacity-70">执行记录</h2>
             <ExecutionList
-              executions={effectiveExecutions}
-              loading={effectiveLoading}
+              executions={executions}
+              loading={executionsLoading}
               onRefresh={handleRefreshClick}
-              onStop={actionsDisabled ? undefined : handleStopClick}
+              onStop={handleStopClick}
               disabled={actionsDisabled}
               stopProcessingId={stopProcessingId}
             />
@@ -1054,38 +595,28 @@ export function App() {
         {/* 中：计划编辑+画布 */}
         <Panel defaultSize={60} minSize={30} order={2} className="p-3 overflow-auto">
           <div className="space-y-4">
-            <PlanActions
-              planValue={planInput}
-              onPlanChange={handlePlanChange}
-              onDryRun={handleDryRun}
-              onExecute={handleExecute}
-              serverOptions={effectiveServers}
-              selectedServer={effectiveSelectedServer}
-              onServerChange={updateSelectedServer}
-              serverError={effectiveMcpError}
-              warnings={planWarnings}
-              message={planMessage}
-              busy={planBusy}
-              disabled={actionsDisabled}
-              error={planError}
-            />
+            {/* PlanActions 已移除：在新 Dashboard/EditorView 内提供执行与服务器选择 */}
             <PlanNodeEditor
               plan={parsedPlan}
               selectedNodeId={selectedPlanNodeId}
               onSelectNode={setSelectedPlanNodeId}
-              onUpdateNode={handleUpdatePlanNode}
+              onUpdateNode={updatePlanNode}
             />
-            <PlanCanvas
-              plan={parsedPlan}
-              bridgeState={effectiveBridgeState}
-              pendingNodeIds={planCanvasPendingNodeIds}
-              currentNodeId={matchingRuntimePlan ? runtimeCurrentNodeId : null}
-              completedNodeIds={matchingRuntimePlan ? runtimeCompletedNodeIds : undefined}
-              executionStatus={matchingRuntimePlan ? runtimeExecutionStatus : undefined}
-              selectedNodeId={selectedPlanNodeId}
-              onSelectNode={setSelectedPlanNodeId}
-              onUpdateNodePositions={handleUpdatePlanNodePositions}
-            />
+            {(() => {
+              const props: any = {
+                plan: parsedPlan,
+                bridgeState: effectiveBridgeState,
+                pendingNodeIds: pendingNodeIdsForCanvas,
+                currentNodeId: matchingRuntimePlan ? runtimeCurrentNodeId : null,
+                completedNodeIds: matchingRuntimePlan ? runtimeCompletedNodeIds : new Set<string>(),
+                selectedNodeId: selectedPlanNodeId,
+                onSelectNode: setSelectedPlanNodeId,
+                onUpdateNodePositions: updatePlanNodePositions
+              };
+              if (matchingRuntimePlan) props.executionStatus = runtimeExecutionStatus;
+              return <PlanCanvas {...props} />;
+            })()}
+
           </div>
         </Panel>
         <PanelResizeHandle className="w-2 bg-base-300/60 hover:bg-base-300 transition-colors cursor-col-resize" aria-label="调整计划画布宽度" />
@@ -1102,14 +633,14 @@ export function App() {
             )}
             <h2 className="text-sm font-semibold opacity-70">待审批</h2>
             <PendingApprovals
-              entries={effectivePendingApprovals}
+              entries={executions.flatMap((exec) => exec.pendingApprovals)}
               disabled={actionsDisabled}
-              commentMap={effectiveCommentMap}
-              onCommentChange={handleApprovalCommentChange}
+              commentMap={approvalComments}
+              onCommentChange={updateApprovalComment}
               onApprove={handleApprove}
               onReject={handleReject}
-              processingId={effectiveProcessingId}
-              onFocusNode={handleFocusApprovalNode}
+              processingId={approvalProcessing}
+              onFocusNode={focusApprovalNode}
             />
 
             {!pluginsDisabled && (

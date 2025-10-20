@@ -22,10 +22,9 @@ async function runShellTask(node: Extract<PlanNode, { type: "local_task" }>, ctx
   if (!node.command) {
     throw new Error(`local_task(shell) 节点 ${node.id} 缺少 command`);
   }
-  const subprocess = await execa(node.command, node.args ?? [], {
-    cwd: node.cwd,
-    shell: false
-  });
+  const execaOptions: any = { shell: false };
+  if (node.cwd) execaOptions.cwd = node.cwd;
+  const subprocess = await execa(node.command, node.args ?? [], execaOptions);
   const output = {
     driver: node.driver,
     command: node.command,
@@ -183,10 +182,10 @@ function classifyFailure(
         details: { code: httpError.code }
       };
     }
-    return {
-      classification: "http_error",
-      details: httpError?.code ? { code: httpError.code } : undefined
-    };
+    if (httpError?.code) {
+      return { classification: "http_error", details: { code: httpError.code } };
+    }
+    return { classification: "http_error" };
   }
   if (driver === "file") {
     const fsError = error as NodeJS.ErrnoException;

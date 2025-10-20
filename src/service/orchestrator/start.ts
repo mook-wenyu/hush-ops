@@ -58,12 +58,11 @@ async function main() {
     process.exit(1);
   }
 
+  const controllerOptions: any = { defaultUseMockBridge };
+  if (databasePath) controllerOptions.databasePath = databasePath;
   const { app, controller } = await createOrchestratorService({
     basePath,
-    controllerOptions: {
-      databasePath,
-      defaultUseMockBridge
-    }
+    controllerOptions
   });
 
   const close = async () => {

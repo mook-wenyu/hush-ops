@@ -3,8 +3,6 @@ import { z } from "zod";
 
 import { ensureAgentPlugin, registerAgentPlugin } from "../registry.js";
 import type { AgentPlugin, AgentRunOptions } from "./types.js";
-import type { OpenAIAPIMode } from "../../utils/openaiApiMode.js";
-import { enqueueOpenAITask } from "../../utils/openaiModeQueue.js";
 
 /**
  * 需求条目结构，约束输出字段的语义与格式。
@@ -39,12 +37,6 @@ export type DemandAnalysis = z.infer<typeof DemandAnalysisSchema>;
 export type DemandAnalysisAgent = Agent<DemandAnalysisContext, typeof DemandAnalysisSchema>;
 
 type ReasoningEffortLevel = "minimal" | "low" | "medium" | "high" | null;
-
-const PREFERRED_API_MODE = Symbol("preferredApiMode");
-
-type AgentWithPreferredApi = DemandAnalysisAgent & {
-  [PREFERRED_API_MODE]?: OpenAIAPIMode;
-};
 
 export interface DemandAnalysisContext {
   projectName?: string;
@@ -115,17 +107,13 @@ export function createDemandAnalysisAgent(
     options.modelSettings
   );
 
-  const agent = new Agent<DemandAnalysisContext, typeof DemandAnalysisSchema>({
-    name: options.name ?? "需求分析示例智能体",
+  const agent = Agent.create({
+    name: options.name ?? "需求分析智能体",
     instructions: BASE_INSTRUCTIONS,
-    model: options.model ?? "gpt-5",
+    model: options.model ?? "gpt-4o",
     modelSettings: mergedModelSettings,
     outputType: DemandAnalysisSchema
-  });
-
-  const preferredApi: OpenAIAPIMode =
-    options.useChatCompletions === false ? "responses" : "chat_completions";
-  (agent as AgentWithPreferredApi)[PREFERRED_API_MODE] = preferredApi;
+  }) as DemandAnalysisAgent;
 
   return agent;
 }
@@ -164,10 +152,7 @@ export async function runDemandAnalysis(
   const agent = options.agent ?? createDemandAnalysisAgent();
   const prompt = buildPrompt(document, options.context);
 
-  const preferredApi =
-    (agent as AgentWithPreferredApi)[PREFERRED_API_MODE] ?? "chat_completions";
-
-  const result = await enqueueOpenAITask(preferredApi, () => run(agent, prompt));
+  const result = await run(agent, prompt);
 
   if (!result.finalOutput) {
     throw new Error("智能体未返回结构化结果，请检查输入或模型配置");

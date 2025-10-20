@@ -60,21 +60,21 @@ export class BridgeClient extends EventEmitter {
 
   private readonly options: InternalOptions;
 
-  private readonly sessionRegistry?: BridgeSessionRegistry;
+  private readonly sessionRegistry: BridgeSessionRegistry | undefined;
 
   private readonly userId: string;
 
-  private readonly sessionMetadata?: Record<string, unknown>;
+  private readonly sessionMetadata: Record<string, unknown> | undefined;
 
   private sessionRecord: BridgeSessionRecord | null;
 
   private state: BridgeState = "disconnected";
 
-  private transport?: Transport;
+  private transport: Transport | undefined;
 
-  private client?: Client;
+  private client: Client | undefined;
 
-  private reconnectTimer?: NodeJS.Timeout;
+  private reconnectTimer: NodeJS.Timeout | undefined;
 
   private manualClose = false;
 
@@ -96,14 +96,15 @@ export class BridgeClient extends EventEmitter {
       ...DEFAULT_RETRY,
       ...(options.retry ?? {})
     };
-    this.options = {
+    const merged: any = {
       ...options,
       logger,
       headers: options.headers ?? {},
-      retry,
-      capabilities: options.capabilities,
-      clientFactory: options.clientFactory
+      retry
     };
+    if (options.capabilities) merged.capabilities = options.capabilities;
+    if (options.clientFactory) merged.clientFactory = options.clientFactory;
+    this.options = merged as InternalOptions;
     this.sessionRegistry = options.sessionRegistry;
     this.userId = options.userId ?? "default";
     this.sessionMetadata = options.sessionMetadata;
@@ -239,12 +240,21 @@ export class BridgeClient extends EventEmitter {
     this.retryAttempt = 0;
     this.setState("connected");
     if (transport instanceof StreamableHTTPClientTransport) {
-      this.persistSession({
-        sessionId: transport.sessionId,
-        metadata: this.sessionMetadata
-      });
-    } else {
+      if (transport.sessionId) {
+        if (this.sessionMetadata) {
+          this.persistSession({ sessionId: transport.sessionId, metadata: this.sessionMetadata });
+        } else {
+          this.persistSession({ sessionId: transport.sessionId });
+        }
+      } else if (this.sessionMetadata) {
+        this.persistSession({ metadata: this.sessionMetadata });
+      } else {
+        this.persistSession({});
+      }
+    } else if (this.sessionMetadata) {
       this.persistSession({ metadata: this.sessionMetadata });
+    } else {
+      this.persistSession({});
     }
   }
 
@@ -253,14 +263,19 @@ export class BridgeClient extends EventEmitter {
       return this.options.transportFactory(this.endpointUrl);
     }
 
-    const transport = new StreamableHTTPClientTransport(this.endpointUrl, {
-      fetch: this.options.fetch,
+    const transportOptions: ConstructorParameters<typeof StreamableHTTPClientTransport>[1] = {
       requestInit: {
         headers: this.options.headers
-      },
-      sessionId: this.sessionRecord?.sessionId
-    });
-    return transport;
+      }
+    };
+    if (this.options.fetch) {
+      (transportOptions as any).fetch = this.options.fetch;
+    }
+    if (this.sessionRecord?.sessionId) {
+      (transportOptions as any).sessionId = this.sessionRecord.sessionId;
+    }
+    const transport = new StreamableHTTPClientTransport(this.endpointUrl, transportOptions);
+    return transport as unknown as Transport;
   }
 
   private createClient(transport: Transport): Client {
@@ -330,14 +345,15 @@ export class BridgeClient extends EventEmitter {
 
   private handleDisconnect(reason?: string) {
     this.destroyCurrentConnection();
+    const maybeReason = reason && reason.length > 0 ? { reason } as BridgeEventPayloads["bridge:disconnected"] : undefined;
     if (this.manualClose) {
-      this.setState("disconnected", { reason });
+      this.setState("disconnected", maybeReason);
       if (this.sessionRecord?.sessionId) {
         this.persistSession({});
       }
       return;
     }
-    this.setState("disconnected", { reason });
+    this.setState("disconnected", maybeReason);
     if (this.sessionRecord?.sessionId) {
       this.persistSession({});
     }
@@ -346,14 +362,14 @@ export class BridgeClient extends EventEmitter {
 
   private destroyCurrentConnection() {
     if (this.transport) {
-      this.transport.onclose = undefined;
-      this.transport.onerror = undefined;
-      this.transport.onmessage = undefined;
+      this.transport.onclose = ((() => {}) as any);
+      this.transport.onerror = ((() => {}) as any);
+      this.transport.onmessage = ((() => {}) as any);
     }
     if (this.client) {
-      this.client.onclose = undefined;
-      this.client.onerror = undefined;
-      this.client.fallbackNotificationHandler = undefined;
+      this.client.onclose = ((() => {}) as any);
+      this.client.onerror = ((() => {}) as any);
+      this.client.fallbackNotificationHandler = (async () => { /* no-op */ }) as any;
     }
     this.transport = undefined;
     this.client = undefined;
@@ -371,10 +387,12 @@ export class BridgeClient extends EventEmitter {
       serverName: this.serverKey,
       userId: this.userId,
       sessionId,
-      lastEventId: update.lastEventId ?? this.sessionRecord?.lastEventId,
-      metadata: update.metadata ?? this.sessionRecord?.metadata ?? this.sessionMetadata,
       updatedAt: new Date().toISOString()
-    };
+    } as BridgeSessionRecord;
+    const lastEventId = update.lastEventId ?? this.sessionRecord?.lastEventId;
+    if (lastEventId) (record as any).lastEventId = lastEventId;
+    const metadata = update.metadata ?? this.sessionRecord?.metadata ?? this.sessionMetadata;
+    if (metadata) (record as any).metadata = metadata;
     this.sessionRegistry.save(record);
     this.sessionRecord = record;
   }

@@ -42,7 +42,7 @@ export class ApprovalController {
 
   private readonly decidedBy: string;
 
-  private onPendingCallback?: (entry: PendingApprovalEntry) => Promise<void> | void;
+  private onPendingCallback: ((entry: PendingApprovalEntry) => Promise<void> | void) | undefined;
 
   private watcher?: FSWatcher;
 
@@ -204,7 +204,7 @@ export class ApprovalController {
       status,
       decidedAt: new Date().toISOString(),
       decidedBy: this.decidedBy,
-      comment
+      ...(comment !== undefined ? { comment } : {})
     };
     await this.store.appendCompleted(completed);
     this.logger.info(`approval ${id} -> ${status}`, {

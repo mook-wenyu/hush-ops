@@ -1,4 +1,4 @@
-import type { XYPosition } from "reactflow";
+import type { XYPosition } from "@xyflow/react";
 
 import type { PlanJson, PlanNodeJson, PlanNodePositionUpdate } from "../components/graph/PlanCanvas";
 

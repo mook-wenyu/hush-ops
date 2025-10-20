@@ -694,15 +694,16 @@ export async function execute(
   const outputs = finalState.outputs ?? {};
   const status = finalState.status ?? "success";
 
-  return {
+  const result: any = {
     planId: plan.id,
     status,
     startedAt,
     finishedAt,
-    lastNodeId: finalState.lastNodeId ?? undefined,
-    error: status === "failed" ? finalState.error : undefined,
     outputs
   };
+  if (finalState.lastNodeId) result.lastNodeId = finalState.lastNodeId;
+  if (status === "failed" && finalState.error !== undefined) result.error = finalState.error;
+  return result as ExecutionResult;
 }
 
 export function createDefaultExecutionContext(

@@ -30,11 +30,11 @@ type PlanSource = {
 };
 
 export default class PlanDryRun extends Command {
-  static summary = "对指定 Plan 执行 dry-run";
+  static override summary = "对指定 Plan 执行 dry-run";
 
-  static description = "读取 Plan 并执行 dryRun，输出潜在警告，帮助在正式执行前校验配置。";
+  static override description = "读取 Plan 并执行 dryRun，输出潜在警告，帮助在正式执行前校验配置。";
 
-  static flags = {
+  static override flags = {
     plan: Flags.string({
       description: "Plan JSON 文件路径",
       default: "plans/demo-mixed.json"
@@ -46,15 +46,17 @@ export default class PlanDryRun extends Command {
     local: Flags.boolean({ description: "强制使用本地 dry-run" })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const parsed = await this.parse(PlanDryRun);
     const flags = parsed.flags as PlanDryRunFlags;
     const planSource = this.resolvePlanSource(flags);
 
-    const mode = resolveExecutionMode(
-      { baseUrl: flags["base-url"], remote: flags.remote, local: flags.local },
-      process.env
-    );
+    const execFlags: any = {};
+    if (flags["base-url"]) execFlags.baseUrl = flags["base-url"];
+    if (typeof flags.remote !== "undefined") execFlags.remote = flags.remote;
+    if (typeof flags.local !== "undefined") execFlags.local = flags.local;
+
+    const mode = resolveExecutionMode(execFlags, process.env);
 
     if (mode.mode === "remote") {
       await this.runRemoteDryRun(planSource, mode.baseUrl!);
@@ -112,7 +114,8 @@ export default class PlanDryRun extends Command {
   private async runLocalDryRun(planJson: unknown, flags: PlanDryRunFlags): Promise<void> {
     const planContext = loadPlan(planJson);
 
-    await registerConfiguredAgents({ directory: flags["agents-directory"] ?? undefined });
+    const regOpts = flags["agents-directory"] ? { directory: flags["agents-directory"] } : {};
+    await registerConfiguredAgents(regOpts as any);
     getAgentPlugin("demand-analysis");
 
     const session = await createMockBridgeSession();
@@ -130,14 +133,17 @@ export default class PlanDryRun extends Command {
     }
 
     const approvalController = new ApprovalController();
-    const executionContext = createDefaultExecutionContext({
+    const contextInit: any = {
       planContext,
       adapters,
       checkpointStore,
       loggerCategory: "plan-dry-run",
-      approvalController,
-      initialSharedState
-    });
+      approvalController
+    };
+    if (typeof initialSharedState !== "undefined") {
+      contextInit.initialSharedState = initialSharedState;
+    }
+    const executionContext = createDefaultExecutionContext(contextInit);
 
     try {
       const summary = await dryRun(planContext, executionContext);

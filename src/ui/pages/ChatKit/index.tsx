@@ -27,11 +27,6 @@ export default function ChatKitPage() {
     if (res.ok) push({ type: 'system', text: '上传成功: note.txt' });
   }
 
-  const enabled = (import.meta as any)?.env?.VITE_CHATKIT_ENABLED === '1';
-  if (!enabled) {
-    return <div className="p-6 text-sm opacity-60">ChatKit 已禁用（VITE_CHATKIT_ENABLED=1 时启用此页）。</div>;
-  }
-
   return (
     <div className="p-4 space-y-3 max-w-3xl mx-auto">
       <div className="card bg-base-200">

@@ -58,56 +58,53 @@ export class BridgeSession extends EventEmitter {
       message: string,
       extras: { result?: unknown; error?: string } = {}
     ) => {
-      const event: ToolStreamEvent = {
+      const event: any = {
         toolName: invocation.toolName,
         correlationId,
         status,
         timestamp: new Date().toISOString(),
-        message,
-        nodeId,
-        executionId,
-        planId,
-        result: extras.result,
-        error: extras.error
+        message
       };
-      this.emit("tool-stream", event);
+      if (nodeId) event.nodeId = nodeId;
+      if (executionId) event.executionId = executionId;
+      if (planId) event.planId = planId;
+      if (typeof extras.result !== "undefined") event.result = extras.result;
+      if (typeof extras.error === "string") event.error = extras.error;
+      this.emit("tool-stream", event as ToolStreamEvent);
     };
 
     this.options.logger?.info("invoke tool start", logContext);
     emitToolEvent("start", `开始调用 ${invocation.toolName}`);
 
-    hooks?.onToolInvoke?.({
-      toolName: invocation.toolName,
-      nodeId,
-      arguments: invocation.arguments
-    });
-
-    if (invocation.options?.riskLevel === "high") {
-      hooks?.onRiskyTool?.({
-        toolName: invocation.toolName,
-        nodeId,
-        arguments: invocation.arguments,
-        riskLevel: invocation.options.riskLevel
-      });
+    {
+      const payload: any = { toolName: invocation.toolName };
+      if (nodeId) payload.nodeId = nodeId;
+      if (typeof invocation.arguments !== "undefined") payload.arguments = invocation.arguments;
+      hooks?.onToolInvoke?.(payload);
     }
 
-    const baseCallOptions = {
-      meta: {
-        correlationId,
-        executionId,
-        planId,
-        nodeId,
-        riskLevel: invocation.options?.riskLevel
-      },
-      timeoutMs: invocation.options?.timeoutMs
-    };
+    if (invocation.options?.riskLevel === "high") {
+      const riskyPayload: any = {
+        toolName: invocation.toolName,
+        riskLevel: invocation.options.riskLevel
+      };
+      if (nodeId) riskyPayload.nodeId = nodeId;
+      if (typeof invocation.arguments !== "undefined") riskyPayload.arguments = invocation.arguments;
+      hooks?.onRiskyTool?.(riskyPayload);
+    }
+
+    const baseCallOptions: any = { meta: { correlationId } };
+    if (executionId) (baseCallOptions.meta as any).executionId = executionId;
+    if (planId) (baseCallOptions.meta as any).planId = planId;
+    if (nodeId) (baseCallOptions.meta as any).nodeId = nodeId;
+    if (invocation.options?.riskLevel) (baseCallOptions.meta as any).riskLevel = invocation.options.riskLevel;
+    if (typeof invocation.options?.timeoutMs === "number") baseCallOptions.timeoutMs = invocation.options.timeoutMs;
 
     try {
+      const callPayload: any = { tool: invocation.toolName };
+      if (typeof invocation.arguments !== "undefined") callPayload.arguments = invocation.arguments;
       const result = await this.client.callTool(
-        {
-          tool: invocation.toolName,
-          arguments: invocation.arguments
-        },
+        callPayload,
         baseCallOptions
       );
       const summary = this.formatResultSummary(result) ?? "工具调用完成";

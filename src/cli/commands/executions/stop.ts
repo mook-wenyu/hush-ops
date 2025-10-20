@@ -5,19 +5,19 @@ import { OrchestratorClient } from "../../../client/orchestrator.js";
 const DEFAULT_BASE_URL = "http://127.0.0.1:3000/api/v1";
 
 export default class ExecutionsStop extends Command {
-  static summary = "停止指定执行";
+  static override summary = "停止指定执行";
 
-  static description = "调用 Orchestrator Service 停止正在运行的执行，标记状态为 cancelled。";
+  static override description = "调用 Orchestrator Service 停止正在运行的执行，标记状态为 cancelled。";
 
-  static args = {
+  static override args = {
     id: Args.string({ description: "执行 ID", required: true })
   } as const;
 
-  static flags = {
+  static override flags = {
     "base-url": Flags.string({ description: "Orchestrator Service 基础地址（默认 http://127.0.0.1:3000/api/v1）" })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { args, flags } = await this.parse(ExecutionsStop);
     const baseUrl = (flags["base-url"] ?? process.env.ORCHESTRATOR_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     const client = new OrchestratorClient({ baseUrl, fetchImpl: fetch });

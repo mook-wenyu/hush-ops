@@ -50,9 +50,9 @@ describe('Dashboard — 诊断错误高亮 overlay', () => {
     const editorBtn = screen.getByRole('button', { name: /编辑器/i });
     fireEvent.click(editorBtn);
 
-    // 使用 waitFor 等待 EditorView 真正渲染
+    // 等待 EditorView 渲染（以“执行计划”按钮出现为准）
     await waitFor(() => {
-      expect(screen.getByText(/编辑模式已开启/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /执行计划|执行/i })).toBeInTheDocument();
     }, { timeout: 3000 });
 
     // EditorView 中 compile 延迟在测试环境下为 0，会立即触发

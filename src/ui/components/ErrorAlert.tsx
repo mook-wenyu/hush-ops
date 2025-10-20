@@ -32,7 +32,7 @@ export function ErrorAlert({ message, error, size = 'sm', showStack = false }: E
   const isDev = (import.meta as any)?.env?.DEV ?? false;
 
   return (
-    <div className={alertClasses({ variant: 'error', size })}>
+    <div className={alertClasses({ variant: 'error', size })} role="alert" aria-live="assertive">
       <div className="flex flex-col gap-1 w-full">
         <span className="font-medium">{message}</span>
         {error && (
@@ -41,7 +41,7 @@ export function ErrorAlert({ message, error, size = 'sm', showStack = false }: E
           </span>
         )}
         {isDev && showStack && error?.stack && (
-          <pre className="text-xs opacity-60 mt-2 overflow-auto max-h-32 bg-base-300/30 p-2 rounded">
+          <pre className="text-xs opacity-60 mt-2 overflow-auto max-h-32 bg-base-300/30 p-2 rounded" role="region" aria-label="错误堆栈">
             {error.stack}
           </pre>
         )}

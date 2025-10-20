@@ -5,13 +5,15 @@ import { requestJson } from "./core/http";
 export type { CompileResponse } from "./types.internal";
 
 export async function compileGraph(graph: { nodes: any[]; edges: any[] }, opts?: { signal?: AbortSignal }): Promise<CompileResponse> {
-  return await requestJson<CompileResponse>("POST", "/designer/compile", { body: { graph }, signal: opts?.signal });
+  const options: any = { body: { graph } };
+  if (opts?.signal) options.signal = opts.signal;
+  return await requestJson<CompileResponse>("POST", "/designer/compile", options);
 }
 
 export interface DryRunSimResponse { timeline?: unknown[]; warnings?: string[] }
 export async function simulateDryRun(plan: unknown, opts?: { fromNode?: string; signal?: AbortSignal }): Promise<DryRunSimResponse> {
-  return await requestJson<DryRunSimResponse>("POST", "/plans/dry-run", {
-    body: { plan, fromNode: opts?.fromNode, dryRun: true },
-    signal: opts?.signal
-  });
+  const options: any = { body: { plan, dryRun: true } };
+  if (opts?.fromNode) options.body.fromNode = opts.fromNode;
+  if (opts?.signal) options.signal = opts.signal;
+  return await requestJson<DryRunSimResponse>("POST", "/plans/dry-run", options);
 }

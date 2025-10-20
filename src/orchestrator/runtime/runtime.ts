@@ -35,7 +35,7 @@ export class OrchestratorRuntime extends EventEmitter {
 
   private running = false;
 
-  private readonly originalRunner: RuntimeParams["executionContext"]["langGraphRunner"];
+  private readonly originalRunner: RuntimeParams["executionContext"]["langGraphRunner"] | undefined;
 
   constructor(private readonly params: RuntimeParams) {
     super();
@@ -122,18 +122,18 @@ export class OrchestratorRuntime extends EventEmitter {
   ): Promise<void> {
     const pendingApprovals = await this.collectPendingApprovals();
     this.pendingApprovals = pendingApprovals;
-    const payload: RuntimeEventPayloads["runtime:state-change"] = {
+    const payload: any = {
       bridgeState: this.currentBridgeState,
-      bridgeMeta: this.bridgeMeta,
       planId: this.currentPlanId ?? this.params.planContext.plan.id,
       executionStatus: this.executionStatus,
       running: this.executionStatus === "running",
-      currentNodeId: this.currentNodeId,
-      lastCompletedNodeId: this.lastCompletedNodeId,
       pendingApprovals,
       ...overrides
     };
-    this.emitRuntimeEvent("runtime:state-change", payload);
+    if (this.bridgeMeta !== undefined) payload.bridgeMeta = this.bridgeMeta;
+    if (this.currentNodeId !== null) payload.currentNodeId = this.currentNodeId;
+    if (this.lastCompletedNodeId !== null) payload.lastCompletedNodeId = this.lastCompletedNodeId;
+    this.emitRuntimeEvent("runtime:state-change", payload as RuntimeEventPayloads["runtime:state-change"]);
   }
 
   private buildRuntimeRunner(): RuntimeParams["executionContext"]["langGraphRunner"] {
@@ -188,7 +188,7 @@ export class OrchestratorRuntime extends EventEmitter {
     this.currentNodeId = null;
 
     const context = this.params.executionContext;
-    context.langGraphRunner = this.buildRuntimeRunner();
+    context.langGraphRunner = this.buildRuntimeRunner()!;
 
     this.emitRuntimeEvent("runtime:execution-start", { planId });
     this.logger.info(`runtime start plan ${planId}`);
@@ -217,7 +217,9 @@ export class OrchestratorRuntime extends EventEmitter {
     } finally {
       this.running = false;
       this.currentNodeId = null;
-      context.langGraphRunner = this.originalRunner;
+      if (this.originalRunner) {
+        context.langGraphRunner = this.originalRunner;
+      }
       await this.emitRuntimeStatus();
     }
 

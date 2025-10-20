@@ -4,7 +4,10 @@ import { getBaseUrl, requestJson } from "./core/http";
 export interface PlanSummary { id: string; description?: string; version?: string }
 
 export async function fetchPlans(): Promise<PlanSummary[]> {
-  const payload = await requestJson<{ plans?: PlanSummary[] }>("GET", "/plans");
+  const payload = await requestJson<{ plans?: PlanSummary[] }>("GET", "/plans", {
+    // 在后端短暂重启/冷启动时提高容错：对 50x/网关类错误做少量重试
+    retry: { maxRetries: 2, baseDelayMs: 600, retriableStatuses: [502, 503, 504] }
+  });
   return payload.plans ?? [];
 }
 

@@ -7,14 +7,15 @@ import { describe, expect, it, afterEach } from "vitest";
 import { FileBridgeSessionRegistry, type BridgeSessionRecord } from "../../src/mcp/bridge/sessionRegistry.js";
 
 function createRecord(overrides: Partial<BridgeSessionRecord> = {}): BridgeSessionRecord {
-  return {
+  const base: any = {
     serverName: overrides.serverName ?? "local-server",
     userId: overrides.userId ?? "default",
     sessionId: overrides.sessionId ?? "session-1",
-    lastEventId: overrides.lastEventId,
-    metadata: overrides.metadata,
     updatedAt: overrides.updatedAt ?? new Date().toISOString()
   };
+  if (overrides.lastEventId) base.lastEventId = overrides.lastEventId;
+  if (overrides.metadata) base.metadata = overrides.metadata;
+  return base as BridgeSessionRecord;
 }
 
 const tempDirs: string[] = [];

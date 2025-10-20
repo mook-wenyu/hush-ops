@@ -6,19 +6,21 @@ import { joinStatePath } from "../../../shared/environment/pathResolver.js";
 const DEFAULT_APPROVAL_DIRECTORY = joinStatePath("approvals");
 
 export default class ApprovalsPending extends Command {
-  static summary = "列出所有待审批节点";
+  static override summary = "列出所有待审批节点";
 
-  static description = "从 JSON 审批存储中读取待审批项并输出摘要。";
+  static override description = "从 JSON 审批存储中读取待审批项并输出摘要。";
 
-  static flags = {
+  static override flags = {
     database: Flags.string({
       description: `指定审批存储目录（默认 ${DEFAULT_APPROVAL_DIRECTORY}）`
     })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { flags } = await this.parse(ApprovalsPending);
-    const store = createApprovalStore({ databasePath: flags.database });
+    const store = createApprovalStore(
+      flags.database ? { databasePath: flags.database } : {}
+    );
 
     try {
       const entries = await fetchPendingEntries(store);

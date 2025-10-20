@@ -57,6 +57,10 @@ function parseCliInput(): CliInput {
     return { mode: "file", payload: filePath };
   }
 
+  // 兜底：若未提供路径，返回 sample；否则返回 file
+  if (!first) {
+    return { mode: "sample" };
+  }
   return { mode: "file", payload: first };
 }
 

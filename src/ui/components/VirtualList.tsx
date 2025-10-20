@@ -31,21 +31,22 @@ export function VirtualList<T>({
 }: VirtualListProps<T>) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const virtualizer = mode === 'window'
-    ? useWindowVirtualizer({
-        count: items.length,
-        estimateSize: () => estimateSize,
-        overscan,
-        scrollMargin: scrollMargin ?? 0
-      })
-    : useVirtualizer({
-        count: items.length,
-        getScrollElement: () => containerRef.current,
-        estimateSize: () => estimateSize,
-        overscan,
-        // 在测试/SSR 环境下提供初始尺寸，避免 0 高导致无法计算可视范围
-        initialRect: { width: 0, height: height ?? 600 }
-      });
+  // 遵循 hooks 规则：避免条件调用，统一在顶层调用两个虚拟化钩子并择一使用
+  const windowVirt = useWindowVirtualizer({
+    count: items.length,
+    estimateSize: () => estimateSize,
+    overscan,
+    scrollMargin: scrollMargin ?? 0
+  });
+  const containerVirt = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => estimateSize,
+    overscan,
+    // 在测试/SSR 环境下提供初始尺寸，避免 0 高导致无法计算可视范围
+    initialRect: { width: 0, height: height ?? 600 }
+  });
+  const virtualizer = mode === 'window' ? windowVirt : containerVirt;
 
   const totalSize = virtualizer.getTotalSize();
   const virtualItems = virtualizer.getVirtualItems();

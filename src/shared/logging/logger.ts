@@ -65,13 +65,13 @@ export function createLoggerFacade(
       return;
     }
     const mergedContext = Object.keys(extra).length > 0 ? { ...baseContext, ...extra } : baseContext;
-    const payload: LogsAppendedPayload = {
+    const payload: any = {
       category: resolvedCategory,
       level,
-      message,
-      context: Object.keys(mergedContext).length > 0 ? mergedContext : undefined
+      message
     };
-    logEventPublisher(payload);
+    if (Object.keys(mergedContext).length > 0) payload.context = mergedContext;
+    logEventPublisher(payload as LogsAppendedPayload);
   };
 
   return {

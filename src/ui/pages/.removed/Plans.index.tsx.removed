@@ -1,0 +1,48 @@
+import React, { useEffect, useState, useCallback } from "react";
+import PlanListPanel from "../../features/plans/PlanListPanel";
+import { fetchPlans, uploadPlanFiles } from "../../services";
+
+export default function PlansPage() {
+  const [plans, setPlans] = useState<{ id: string; description?: string; version?: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const list = await fetchPlans();
+      setPlans(list);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-lg font-semibold">计划</h2>
+      <div className="rounded-lg border border-base-300/50 bg-base-100/60 p-3 min-h-[60vh]">
+        <PlanListPanel
+          plans={plans}
+          loading={loading}
+          error={error}
+          onUpload={async (files)=> { await uploadPlanFiles(files); await load(); }}
+          onImportExamples={async ()=>{
+            try {
+              const { fetchExamplePlans, importExamplePlan } = await import("../../services");
+              const examples = await fetchExamplePlans();
+              for (const ex of examples) await importExamplePlan(ex.name);
+              await load();
+            } catch (e) {
+              setError((e as Error).message ?? '导入示例失败');
+            }
+          }}
+        />
+      </div>
+    </div>
+  );
+}

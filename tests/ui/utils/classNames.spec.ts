@@ -48,30 +48,31 @@ describe('cardClasses', () => {
   it('应该返回默认卡片样式', () => {
     const result = cardClasses();
     expect(result).toContain('card');
-    expect(result).toContain('bg-base-200/70');
-    expect(result).toContain('shadow-xl');
+    expect(result).toContain('bg-base-200');
+    expect(result).toContain('shadow-sm');
   });
 
   it('应该返回嵌套卡片样式', () => {
     const result = cardClasses({ variant: 'nested' });
     expect(result).toContain('card');
-    expect(result).toContain('bg-base-300/70');
-    expect(result).toContain('shadow-xl');
+    expect(result).toContain('bg-base-100');
+    expect(result).toContain('border');
+    expect(result).toContain('border-base-content/10');
   });
 
   it('应该返回带边框的卡片样式', () => {
     const result = cardClasses({ bordered: true });
     expect(result).toContain('card');
-    expect(result).toContain('bg-base-200/70');
+    expect(result).toContain('bg-base-200');
     expect(result).toContain('border');
     expect(result).toContain('border-base-content/10');
-    expect(result).not.toContain('shadow-xl');
+    expect(result).not.toContain('shadow-sm');
   });
 
   it('应该处理多个选项组合', () => {
     const result = cardClasses({ variant: 'nested', bordered: true });
     expect(result).toContain('card');
-    expect(result).toContain('bg-base-300/70');
+    expect(result).toContain('bg-base-100');
     expect(result).toContain('border');
   });
 });
@@ -79,12 +80,12 @@ describe('cardClasses', () => {
 describe('cardBodyClasses', () => {
   it('应该返回默认card-body样式', () => {
     const result = cardBodyClasses();
-    expect(result).toBe('card-body space-y-4');
+    expect(result).toBe('card-body p-4 space-y-4');
   });
 
   it('应该返回紧凑card-body样式', () => {
     const result = cardBodyClasses({ compact: true });
-    expect(result).toBe('card-body space-y-2 p-4 text-sm');
+    expect(result).toBe('card-body p-4 space-y-3 text-sm');
   });
 });
 

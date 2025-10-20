@@ -40,6 +40,9 @@ import {
   type McpServerConfig
 } from "../../mcp/config/loader.js";
 import { getHushOpsStateDirectory } from "../../shared/environment/pathResolver.js";
+import type { ExecutionsRepository } from "./repositories/ExecutionsRepository.js";
+import { RepositoryHealthMonitor, type RepositoryHealthStatus } from "../../shared/persistence/RepositoryHealthMonitor.js";
+import type { ExecutionRecord as UiExecutionRecord } from "../../ui/types/orchestrator.js";
 
 export interface ExecutePlanRequest {
   readonly plan: unknown;
@@ -63,6 +66,7 @@ export interface OrchestratorControllerOptions {
   readonly defaultUseMockBridge?: boolean;
   readonly approvalStore?: ApprovalStore;
   readonly toolStreamStore?: ToolStreamStore;
+  readonly executionsRepository?: ExecutionsRepository;
   readonly maxConcurrency?: number; // 0/undefined 表示不限制
 }
 
@@ -168,19 +172,22 @@ async function createBridgeSession(
     directory: resolveStorageDirectory(options.databasePath)
   });
 
-  const client = new BridgeClient({
-    endpoint: serverConfig.endpoint,
-    serverName: serverConfig.name,
-    headers: serverConfig.headers,
-    retry: serverConfig.retry,
-    sessionRegistry,
-    userId: serverConfig.session?.userId ?? "default",
-    sessionMetadata: {
-      serverName: serverConfig.name,
+  const client = new BridgeClient((() => {
+    const base: any = {
       endpoint: serverConfig.endpoint,
-      ...(serverConfig.session?.metadata ?? {})
-    }
-  });
+      serverName: serverConfig.name,
+      sessionRegistry,
+      userId: serverConfig.session?.userId ?? "default",
+      sessionMetadata: {
+        serverName: serverConfig.name,
+        endpoint: serverConfig.endpoint,
+        ...(serverConfig.session?.metadata ?? {})
+      }
+    };
+    if (serverConfig.headers) base.headers = serverConfig.headers;
+    if (serverConfig.retry) base.retry = serverConfig.retry;
+    return base as import("../../mcp/bridge/types.js").BridgeOptions;
+  })());
 
   const session = new RealBridgeSession(client, {
     logger: {
@@ -209,6 +216,10 @@ export class OrchestratorController extends EventEmitter {
 
   private readonly ownsToolStreamStore: boolean;
 
+  private readonly executionsRepository?: ExecutionsRepository;
+
+  private readonly repositoryHealthMonitor: RepositoryHealthMonitor;
+
   // 全局并发门控（使用 p-limit）
   private readonly concurrencyLimit: ReturnType<typeof pLimit> | null;
 
@@ -218,6 +229,10 @@ export class OrchestratorController extends EventEmitter {
     const storageDirectory = resolveStorageDirectory(options.databasePath);
     this.approvalStore =
       options.approvalStore ?? new ApprovalStore({ directory: storageDirectory });
+    if (options.executionsRepository !== undefined) {
+      this.executionsRepository = options.executionsRepository;
+    }
+
     if (options.toolStreamStore) {
       this.toolStreamStore = options.toolStreamStore;
       this.ownsToolStreamStore = false;
@@ -234,11 +249,26 @@ export class OrchestratorController extends EventEmitter {
       : (Number.isFinite(envLimit) ? envLimit : 0);
     const maxConcurrency = computed > 0 ? Math.floor(computed) : 0;
     this.concurrencyLimit = maxConcurrency > 0 ? pLimit(maxConcurrency) : null;
+
+    // 初始化Repository健康监控器
+    this.repositoryHealthMonitor = new RepositoryHealthMonitor({
+      maxFailures: 3,
+      recoveryTestInterval: 60000, // 1分钟
+      logCategory: "ExecutionsRepository-Health",
+      onHealthChange: (healthy) => {
+        const logger = createLoggerFacade("orchestrator-controller");
+        if (healthy) {
+          logger.info("ExecutionsRepository recovered - persistence enabled");
+        } else {
+          logger.warn("ExecutionsRepository degraded - operating in memory-only mode");
+        }
+      }
+    });
   }
 
   private buildSnapshot(record: ExecutionRecord): ExecutionSnapshot {
     const bridgeState = record.currentBridgeState ?? record.bridgeStates.at(-1);
-    return {
+    const base: ExecutionSnapshot = {
       executionId: record.id,
       planId: record.planId,
       status: record.status,
@@ -246,16 +276,17 @@ export class OrchestratorController extends EventEmitter {
       running: record.running,
       executorType: record.executorType,
       createdAt: record.createdAt,
-      startedAt: record.startedAt,
-      finishedAt: record.finishedAt,
-      currentNodeId: record.currentNodeId ?? null,
-      lastCompletedNodeId: record.lastCompletedNodeId ?? null,
-      pendingApprovals: [...record.pendingApprovals],
-      bridgeState,
-      bridgeMeta: record.bridgeMeta,
-      result: record.result,
-      error: record.error
-    };
+      pendingApprovals: [...record.pendingApprovals]
+    } as ExecutionSnapshot;
+    if (record.startedAt) (base as any).startedAt = record.startedAt;
+    if (record.finishedAt) (base as any).finishedAt = record.finishedAt;
+    if (record.currentNodeId != null) (base as any).currentNodeId = record.currentNodeId;
+    if (record.lastCompletedNodeId != null) (base as any).lastCompletedNodeId = record.lastCompletedNodeId;
+    if (bridgeState) (base as any).bridgeState = bridgeState;
+    if (record.bridgeMeta) (base as any).bridgeMeta = record.bridgeMeta;
+    if (record.result !== undefined) (base as any).result = record.result;
+    if (record.error) (base as any).error = record.error;
+    return base;
   }
 
   listExecutionSnapshots(): ExecutionSnapshot[] {
@@ -274,7 +305,78 @@ export class OrchestratorController extends EventEmitter {
   }
 
   getExecution(id: string): ExecutionRecord | undefined {
-    return this.executions.get(id);
+    // 优先从内存获取
+    const memoryRecord = this.executions.get(id);
+    if (memoryRecord) {
+      return memoryRecord;
+    }
+
+    // 内存中没有，尝试从repository获取历史记录
+    // 注意：这是同步方法，但repository.read是异步的
+    // 这里我们只能返回undefined，让调用者使用getExecutionAsync
+    return undefined;
+  }
+
+  /**
+   * 异步获取执行记录，支持从repository加载历史记录
+   */
+  async getExecutionAsync(id: string): Promise<ExecutionRecord | undefined> {
+    // 优先从内存获取
+    const memoryRecord = this.executions.get(id);
+    if (memoryRecord) {
+      return memoryRecord;
+    }
+
+    // Fallback到repository获取历史记录
+    if (this.executionsRepository) {
+      const repoRecord = await this.executionsRepository.read(id);
+      if (repoRecord) {
+        // 转换为控制器内部的 ExecutionRecord 形态（类型收敛/兼容 UI 定义）
+        const converted = repoRecord as unknown as ExecutionRecord;
+        // 将历史记录加载到内存中以提升后续访问性能
+        this.executions.set(id, converted);
+        return converted;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * 持久化执行记录到repository（非阻塞）
+   *
+   * 使用健康监控器进行降级保护：
+   * - 健康时：正常持久化并记录成功/失败
+   * - 不健康时：跳过持久化，仅保持内存状态
+   */
+  private persistExecutionRecord(record: ExecutionRecord): void {
+    if (!this.executionsRepository) {
+      return;
+    }
+
+    // 降级保护：不健康时跳过持久化
+    if (!this.repositoryHealthMonitor.isHealthy()) {
+      return;
+    }
+
+    // 异步持久化，不阻塞主流程
+    this.executionsRepository.update(record.id, record as unknown as UiExecutionRecord)
+      .then(() => {
+        // 记录成功操作（可能触发恢复）
+        this.repositoryHealthMonitor.recordSuccess();
+      })
+      .catch((error) => {
+        // 记录失败操作（可能触发降级）
+        this.repositoryHealthMonitor.recordFailure(error instanceof Error ? error : new Error(String(error)));
+
+        // 静默记录持久化失败
+        const logger = createLoggerFacade("orchestrator-controller");
+        logger.warn("Failed to persist execution record", {
+          executionId: record.id,
+          error: error instanceof Error ? error.message : String(error),
+          healthStatus: this.repositoryHealthMonitor.getStatus()
+        });
+      });
   }
 
   async stopExecution(id: string): Promise<ExecutionRecord> {
@@ -288,12 +390,16 @@ export class OrchestratorController extends EventEmitter {
       record.executionStatus = "cancelled";
       record.running = false;
       record.finishedAt = new Date().toISOString();
-      record.error = undefined;
+      delete (record as any).error;
       record.pendingApprovals = [];
       const activeId2 = this.activePlanExecutions.get(record.planId);
       if (activeId2 === id) {
         this.activePlanExecutions.delete(record.planId);
       }
+
+      // 持久化取消状态
+      this.persistExecutionRecord(record);
+
       this.emit("execution.cancelled", { executionId: id, planId: record.planId });
       this.emitSnapshot(id);
       return record;
@@ -308,13 +414,17 @@ export class OrchestratorController extends EventEmitter {
     record.executionStatus = "cancelled";
     record.running = false;
     record.finishedAt = new Date().toISOString();
-    record.error = undefined;
+    delete (record as any).error;
     record.pendingApprovals = [];
     // 释放计划级并发占用
     const activeId = this.activePlanExecutions.get(record.planId);
     if (activeId === id) {
       this.activePlanExecutions.delete(record.planId);
     }
+
+    // 持久化取消状态
+    this.persistExecutionRecord(record);
+
     this.emit("execution.cancelled", { executionId: id, planId: record.planId });
     this.emitSnapshot(id);
     return record;
@@ -379,21 +489,39 @@ export class OrchestratorController extends EventEmitter {
       executionStatus: "idle",
       running: false,
       currentNodeId: null,
-      lastCompletedNodeId: null,
-      currentBridgeState: undefined,
-      bridgeMeta: undefined
+      lastCompletedNodeId: null
     };
     this.executions.set(executionId, initialRecord);
-    this.emit("execution.created", { executionId, planId });
-    this.emitSnapshot(executionId);
 
     const logger = createLoggerFacade("orchestrator-service", {
       executionId,
       planId
     });
+
+    // 持久化到repository（使用健康监控降级保护）
+    if (this.executionsRepository && this.repositoryHealthMonitor.isHealthy()) {
+      try {
+        await this.executionsRepository.create(initialRecord as unknown as UiExecutionRecord);
+        this.repositoryHealthMonitor.recordSuccess();
+      } catch (error) {
+        // 记录失败操作（可能触发降级）
+        this.repositoryHealthMonitor.recordFailure(error instanceof Error ? error : new Error(String(error)));
+
+        // 记录持久化失败但不阻塞执行
+        logger.warn("Failed to persist execution record to repository", {
+          executionId,
+          error: error instanceof Error ? error.message : String(error),
+          healthStatus: this.repositoryHealthMonitor.getStatus()
+        });
+      }
+    }
+
+    this.emit("execution.created", { executionId, planId });
+    this.emitSnapshot(executionId);
+
     const { session, registry: sessionRegistry } = await createBridgeSession(
       this.options,
-      { useMockBridge, mcpServer: request.mcpServer },
+      { useMockBridge, ...(request.mcpServer ? { mcpServer: request.mcpServer } : {}) },
       logger
     );
 
@@ -402,19 +530,21 @@ export class OrchestratorController extends EventEmitter {
       const status = (event.status ?? "start") as RuntimeToolStreamStatus;
 
       const source = useMockBridge ? "mock" : event.source ?? "live";
-      const storedChunk = this.toolStreamStore.appendChunk({
+      const chunkInput: any = {
         toolName: event.toolName,
         message: event.message,
         status,
         correlationId,
         executionId,
         planId: planContext.plan.id,
-        nodeId: event.nodeId,
-        error: event.error,
         timestamp: event.timestamp,
         source
-      });
-      const payload: RuntimeToolStreamPayload = {
+      };
+      if (event.nodeId) chunkInput.nodeId = event.nodeId;
+      if (event.error) chunkInput.error = event.error;
+      const storedChunk = this.toolStreamStore.appendChunk(chunkInput);
+
+      const payload: any = {
         toolName: storedChunk.toolName,
         message: storedChunk.message,
         timestamp: storedChunk.timestamp,
@@ -422,14 +552,14 @@ export class OrchestratorController extends EventEmitter {
         correlationId: storedChunk.correlationId,
         executionId,
         planId: storedChunk.planId,
-        nodeId: storedChunk.nodeId,
-        result: event.result,
-        error: storedChunk.error ?? undefined,
         sequence: storedChunk.sequence,
         storedAt: storedChunk.storedAt,
         replayed: false,
         source
       };
+      if (storedChunk.nodeId) payload.nodeId = storedChunk.nodeId;
+      if (event.result !== undefined) payload.result = event.result;
+      if (storedChunk.error) payload.error = storedChunk.error;
       logger.info("tool stream", {
         executionId,
         planId: planContext.plan.id,
@@ -498,6 +628,9 @@ export class OrchestratorController extends EventEmitter {
         this.activePlanExecutions.set(planId, executionId);
       }
 
+      // 持久化执行开始状态
+      this.persistExecutionRecord(record);
+
       this.emit("execution.started", { executionId, planId });
       this.emitSnapshot(executionId);
 
@@ -508,6 +641,10 @@ export class OrchestratorController extends EventEmitter {
         record.result = result;
         record.executionStatus = result.status;
         record.running = false;
+
+        // 持久化执行完成状态
+        this.persistExecutionRecord(record);
+
         this.emit("execution.completed", { executionId, result });
         this.emitSnapshot(executionId);
       } catch (error) {
@@ -517,6 +654,10 @@ export class OrchestratorController extends EventEmitter {
         record.error = { message };
         record.executionStatus = "failed";
         record.running = false;
+
+        // 持久化执行失败状态
+        this.persistExecutionRecord(record);
+
         this.emit("execution.failed", { executionId, error: message });
         this.emitSnapshot(executionId);
       } finally {
@@ -674,18 +815,19 @@ export class OrchestratorController extends EventEmitter {
     timestamp?: string;
   }) {
     const timestamp = input.timestamp ?? new Date().toISOString();
-    return this.toolStreamStore.appendChunk({
+    const chunk: any = {
       correlationId: input.correlationId,
       toolName: input.toolName,
-      executionId: input.executionId,
-      planId: input.planId,
-      nodeId: input.nodeId,
       status: input.status ?? "start",
       message: input.message,
-      error: input.error,
       source: input.source ?? "agent",
       timestamp
-    });
+    };
+    if (input.executionId) chunk.executionId = input.executionId;
+    if (input.planId) chunk.planId = input.planId;
+    if (input.nodeId) chunk.nodeId = input.nodeId;
+    if (input.error) chunk.error = input.error;
+    return this.toolStreamStore.appendChunk(chunk);
   }
 
   replayToolStream(executionId: string, correlationId: string): number {
@@ -694,7 +836,7 @@ export class OrchestratorController extends EventEmitter {
       return 0;
     }
     for (const chunk of chunks) {
-      const payload: RuntimeToolStreamPayload = {
+      const payload: any = {
         toolName: chunk.toolName,
         message: chunk.message,
         timestamp: chunk.timestamp,
@@ -702,22 +844,31 @@ export class OrchestratorController extends EventEmitter {
         correlationId: chunk.correlationId,
         executionId,
         planId: chunk.planId,
-        nodeId: chunk.nodeId,
-        error: chunk.error ?? undefined,
         sequence: chunk.sequence,
         storedAt: chunk.storedAt,
         replayed: true,
         source: chunk.source ?? "replay"
       };
+      if (chunk.nodeId) payload.nodeId = chunk.nodeId;
+      if (chunk.error) payload.error = chunk.error;
       this.emit("runtime.tool-stream", payload);
     }
     return chunks.length;
+  }
+
+  /**
+   * 获取Repository健康状态（用于外部监控）
+   */
+  getRepositoryHealth(): RepositoryHealthStatus {
+    return this.repositoryHealthMonitor.getStatus();
   }
 
   close(): void {
     if (this.ownsToolStreamStore) {
       this.toolStreamStore.close();
     }
+    // 清理健康监控器资源（停止恢复定时器）
+    this.repositoryHealthMonitor.close();
   }
 
   private emitSnapshot(executionId: string) {
@@ -742,7 +893,7 @@ export class OrchestratorController extends EventEmitter {
     record.currentNodeId = payload.currentNodeId ?? null;
     record.lastCompletedNodeId = payload.lastCompletedNodeId ?? null;
     record.currentBridgeState = payload.bridgeState;
-    record.bridgeMeta = payload.bridgeMeta;
+    if (payload.bridgeMeta) record.bridgeMeta = payload.bridgeMeta;
     if (payload.bridgeState) {
       record.bridgeStates.push(payload.bridgeState);
       this.emit("bridge.state-change", {

@@ -24,16 +24,16 @@ export interface RuntimeToolStreamPayload {
   readonly message: string;
   readonly timestamp: string;
   readonly status: RuntimeToolStreamStatus;
-  readonly correlationId?: string;
-  readonly executionId?: string;
-  readonly planId?: string;
-  readonly nodeId?: string;
+  readonly correlationId?: string | undefined;
+  readonly executionId?: string | undefined;
+  readonly planId?: string | undefined;
+  readonly nodeId?: string | undefined;
   readonly result?: unknown;
-  readonly error?: string;
-  readonly sequence?: number;
-  readonly replayed?: boolean;
-  readonly storedAt?: string;
-  readonly source?: string;
+  readonly error?: string | undefined;
+  readonly sequence?: number | undefined;
+  readonly replayed?: boolean | undefined;
+  readonly storedAt?: string | undefined;
+  readonly source?: string | undefined;
 }
 
 export interface ToolStreamChunkPayload extends RuntimeToolStreamPayload {
@@ -44,9 +44,9 @@ export interface ToolStreamChunkPayload extends RuntimeToolStreamPayload {
 export interface ToolStreamSummaryPayload {
   readonly correlationId: string;
   readonly toolName: string;
-  readonly executionId?: string;
-  readonly planId?: string;
-  readonly nodeId?: string;
+  readonly executionId?: string | undefined;
+  readonly planId?: string | undefined;
+  readonly nodeId?: string | undefined;
   readonly chunkCount: number;
   readonly latestSequence: number;
   readonly updatedAt: string;

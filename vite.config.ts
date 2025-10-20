@@ -8,7 +8,14 @@ const UI_ROOT = resolve(__dirname, "src/ui");
 export default defineConfig({
   root: UI_ROOT,
   publicDir: resolve(UI_ROOT, "public"), // 静态资源目录
-  plugins: [tailwindcss(), react()],
+  plugins: [
+    tailwindcss(),
+    react({
+      babel: {
+        plugins: [["babel-plugin-react-compiler", {}]]
+      }
+    })
+  ],
   server: {
     host: "127.0.0.1",
     port: 5173,
@@ -17,7 +24,19 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:3000",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, "/api")
+        rewrite: (path) => path.replace(/^\/api/, "/api"),
+        configure: (proxy, _options) => {
+          proxy.on("error", (err, _req, res) => {
+            console.warn("[Vite Proxy Error]", err.message);
+            if (!res.headersSent) {
+              res.writeHead(503, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({
+                error: "Backend service unavailable",
+                message: "后端服务暂未就绪，请稍候刷新页面"
+              }));
+            }
+          });
+        }
       }
     }
   },
@@ -28,7 +47,19 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:3000",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, "/api")
+        rewrite: (path) => path.replace(/^\/api/, "/api"),
+        configure: (proxy, _options) => {
+          proxy.on("error", (err, _req, res) => {
+            console.warn("[Vite Proxy Error]", err.message);
+            if (!res.headersSent) {
+              res.writeHead(503, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({
+                error: "Backend service unavailable",
+                message: "后端服务暂未就绪，请稍候刷新页面"
+              }));
+            }
+          });
+        }
       }
     }
   },

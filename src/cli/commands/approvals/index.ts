@@ -4,11 +4,11 @@ const ACTIONS = ["pending", "approve", "reject"] as const;
 type Action = (typeof ACTIONS)[number];
 
 export default class ApprovalsRouter extends Command {
-  static summary = "审批命令入口（兼容旧参数形式）";
+  static override summary = "审批命令入口（兼容旧参数形式）";
 
-  static description = "兼容旧版 CLI，支持 approvals pending/approve/reject 调用。";
+  static override description = "兼容旧版 CLI，支持 approvals pending/approve/reject 调用。";
 
-  static args = {
+  static override args = {
     action: Args.string({
       description: "目标操作 (pending|approve|reject)",
       required: true,
@@ -20,7 +20,7 @@ export default class ApprovalsRouter extends Command {
     })
   } as const;
 
-  static flags = {
+  static override flags = {
     database: Flags.string({
       description: "指定审批存储目录"
     }),
@@ -29,7 +29,7 @@ export default class ApprovalsRouter extends Command {
     })
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { args, flags } = await this.parse(ApprovalsRouter);
     const action = args.action as Action;
     const forwardFlags = this.buildForwardFlags(flags);
@@ -51,7 +51,7 @@ export default class ApprovalsRouter extends Command {
     await this.config.runCommand("approvals:reject", argv);
   }
 
-  private buildForwardFlags(flags: { database?: string; comment?: string }): string[] {
+  private buildForwardFlags(flags: { database?: string | undefined; comment?: string | undefined }): string[] {
     const result: string[] = [];
     if (flags.database) {
       result.push("--database", flags.database);

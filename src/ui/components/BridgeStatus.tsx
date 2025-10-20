@@ -1,4 +1,5 @@
 import type { BridgeState } from "../types/orchestrator";
+import { cardClasses } from "../utils/classNames";
 
 const LABELS: Record<BridgeState, string> = {
   connected: "已连接",
@@ -15,7 +16,7 @@ interface BridgeStatusProps {
 
 export function BridgeStatus({ state, onReconnect, reconnectDisabled }: BridgeStatusProps) {
   return (
-    <div className="card bg-base-300/70 shadow-xl">
+    <div className={cardClasses()}>
       <div className="card-body space-y-4">
         <h2 className="card-title text-lg">桥接状态</h2>
         <div className="flex flex-wrap items-center gap-3">

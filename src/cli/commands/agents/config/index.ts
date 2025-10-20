@@ -4,11 +4,11 @@ const ACTIONS = ["generate", "list"] as const;
 type Action = (typeof ACTIONS)[number];
 
 export default class AgentConfigRouter extends Command {
-  static summary = "agents:config 命令入口";
+  static override summary = "agents:config 命令入口";
 
-  static description = "兼容旧 CLI，用法 `agents:config <generate|list>`";
+  static override description = "兼容旧 CLI，用法 `agents:config <generate|list>`";
 
-  static args = {
+  static override args = {
     action: Args.string({
       description: "子命令 (generate | list)",
       required: true,
@@ -16,7 +16,7 @@ export default class AgentConfigRouter extends Command {
     })
   } as const;
 
-  static flags = {
+  static override flags = {
     directory: Flags.string({ description: "配置目录" }),
     id: Flags.string({ description: "配置 ID" }),
     module: Flags.string({ description: "模块路径" }),
@@ -34,7 +34,7 @@ export default class AgentConfigRouter extends Command {
     "dry-run": Flags.boolean()
   } as const;
 
-  async run(): Promise<void> {
+  override async run(): Promise<void> {
     const { args, flags } = await this.parse(AgentConfigRouter);
     const action = args.action as Action;
     const argv = this.buildForwardArgs(action, flags);

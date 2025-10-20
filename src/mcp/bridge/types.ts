@@ -68,12 +68,12 @@ export interface BridgeOptions {
 }
 
 export interface ToolCallOptions {
-  nodeId?: string;
-  riskLevel?: "low" | "medium" | "high";
-  executionId?: string;
-  planId?: string;
-  correlationId?: string;
-  timeoutMs?: number;
+  nodeId?: string | undefined;
+  riskLevel?: "low" | "medium" | "high" | undefined;
+  executionId?: string | undefined;
+  planId?: string | undefined;
+  correlationId?: string | undefined;
+  timeoutMs?: number | undefined;
 }
 
 export interface ToolInvocation {
@@ -90,12 +90,12 @@ export interface ToolStreamEvent {
   status: ToolActivityStatus;
   timestamp: string;
   message: string;
-  nodeId?: string;
-  executionId?: string;
-  planId?: string;
+  nodeId?: string | undefined;
+  executionId?: string | undefined;
+  planId?: string | undefined;
   result?: unknown;
-  error?: string;
-  source?: string;
+  error?: string | undefined;
+  source?: string | undefined;
 }
 
 export interface BridgeSecurityHooks {

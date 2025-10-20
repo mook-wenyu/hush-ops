@@ -1,27 +1,53 @@
 # UI/UX 设计规范指南
 
-**版本**: 1.0.0
-**更新时间**: 2025-10-16
+**版本**: 3.0.0
+**更新时间**: 2025-10-18
 **适用范围**: Hush-Ops 混合编排可视化调度平台前端
 
 ---
 
 ## 1. 设计系统概述
 
-本设计规范基于 **DaisyUI 5.2.1** 组件库，采用 **Tailwind CSS 4.1.14** 作为样式基础。所有组件设计遵循统一的视觉语言和交互模式，确保用户体验的一致性。
+本设计规范采用**苹果式极简主义**设计理念，基于 **Tailwind CSS 4.1.14** 和 **DaisyUI 5.2.1** 主题系统。所有组件设计遵循清晰、和谐、一致的原则，创造专注、高效的用户体验。
 
-**核心原则**:
-- 基于DaisyUI，不重复造轮子
-- 语义化颜色使用
-- 统一的间距和排版
-- 明确的交互反馈
-- 无障碍支持
+**核心设计原则（基于 Apple HIG）**:
+
+1. **Hierarchy（层级）**：建立清晰的视觉层级，让内容成为焦点
+2. **Harmony（和谐）**：减少视觉噪音，创造统一的界面体验
+3. **Consistency（一致性）**：保持组件和交互的一致性
+
+**极简化四大原则**:
+
+1. **聚焦核心**：每个界面只展示最重要的信息和操作
+2. **渐进披露**：详细信息按需展示，避免一次性堆砌
+3. **智能自动**：减少手动操作，系统自动完成常规任务
+4. **视觉克制**：减少装饰元素，让内容成为焦点
+
+**视觉优化策略（v3.0 核心改进）**:
+
+1. **阴影最小化**：顶层卡片使用 `shadow-sm` 微妙阴影，嵌套卡片使用边框
+2. **背景色纯化**：移除所有透明度，使用纯色背景确保清晰层级
+3. **主题专业化**：使用 corporate（明亮专业）和 business（深色专业）主题
+4. **间距标准化**：统一使用 `p-4`、`gap-4` 创造呼吸感
 
 ---
 
 ## 2. 颜色系统
 
-### 2.1 语义化颜色映射
+### 2.1 主题选择
+
+使用 daisyUI 亮/暗主题：
+
+```css
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+}
+```
+
+- **light**：浅色主题（默认）
+- **dark**：深色主题（系统偏好时启用）
+
+### 2.2 语义化颜色映射
 
 | 颜色类型 | DaisyUI类 | 用途 | 示例场景 |
 |---------|----------|-----|---------|
@@ -33,11 +59,16 @@
 
 ### 2.2 背景和边框
 
-```typescript
-// 卡片背景（统一标准）
-bg-base-200/70
+**v3.0 核心变更**：移除所有透明度，使用纯色背景
 
-// 卡片边框（统一标准）
+```typescript
+// 顶层卡片背景
+bg-base-200
+
+// 嵌套卡片背景
+bg-base-100
+
+// 统一边框
 border-base-content/10
 
 // 文本弱化
@@ -46,10 +77,20 @@ text-base-content/60
 
 **示例**:
 ```tsx
-<div className="card bg-base-200/70 border border-base-content/10">
+import { cardClasses } from '../utils/classNames';
+
+// 顶层卡片
+<div className={cardClasses()}>
   <div className="card-body">
     <h2 className="card-title">标题</h2>
     <p className="text-base-content/60">次要信息</p>
+  </div>
+</div>
+
+// 嵌套卡片
+<div className={cardClasses({ variant: 'nested' })}>
+  <div className="card-body">
+    {/* 内容 */}
   </div>
 </div>
 ```
@@ -89,31 +130,57 @@ text-base-content/60
 
 ### 4.1 卡片（Card）
 
-**基础样式**:
+**v3.0 核心变更**：统一使用 `cardClasses()` 工具函数
+
+**导入工具函数**:
 ```tsx
-<div className="card bg-base-200/70 shadow-xl">
-  <div className="card-body space-y-4">
+import { cardClasses, cardBodyClasses } from '../utils/classNames';
+```
+
+**顶层卡片**（带微妙阴影）:
+```tsx
+<div className={cardClasses()}>
+  <div className={cardBodyClasses()}>
     <h2 className="card-title text-lg">卡片标题</h2>
     <p>卡片内容</p>
   </div>
 </div>
 ```
+生成样式：`card bg-base-200 shadow-sm`
 
-**带边框卡片**:
+**嵌套卡片**（使用边框而非阴影）:
 ```tsx
-<div className="card bg-base-200/70 border border-base-content/10">
-  <div className="card-body space-y-2 p-4 text-sm">
+<div className={cardClasses({ variant: 'nested' })}>
+  <div className={cardBodyClasses()}>
+    {/* 内容 */}
+  </div>
+</div>
+```
+生成样式：`card bg-base-100 border border-base-content/10`
+
+**带边框的顶层卡片**:
+```tsx
+<div className={cardClasses({ bordered: true })}>
+  <div className={cardBodyClasses()}>
+    {/* 内容 */}
+  </div>
+</div>
+```
+
+**紧凑模式**:
+```tsx
+<div className={cardClasses()}>
+  <div className={cardBodyClasses({ compact: true })}>
     {/* 紧凑内容 */}
   </div>
 </div>
 ```
 
-**嵌套卡片**（父卡片）:
-```tsx
-<div className="card bg-base-300/70 shadow-xl">
-  {/* 外层使用base-300，内层使用base-200 */}
-</div>
-```
+**设计策略**:
+- **顶层卡片**：`shadow-sm` 创造轻微深度感
+- **嵌套卡片**：边框区分，无阴影，避免视觉噪音
+- **背景色**：纯色，无透明度，清晰层级（base-200 → base-100）
+- **间距**：标准 `p-4 space-y-4`，紧凑 `p-4 space-y-3`
 
 ### 4.2 按钮（Button）
 
@@ -320,37 +387,10 @@ text-base-content/60
 
 ---
 
-## 8. 无障碍支持
+## 8. 主题与外观
 
-### 8.1 必需的ARIA属性
-
-**列表**:
-```tsx
-<div role="list" aria-label="执行记录列表">
-  <article role="listitem">
-    {/* 列表项内容 */}
-  </article>
-</div>
-```
-
-**按钮**:
-```tsx
-<button
-  type="button"
-  aria-label="停止执行"
-  title="停止执行"
->
-  <IconSquare size={16} />
-</button>
-```
-
-**loading状态**:
-```tsx
-<div role="status" aria-live="polite">
-  <span className="loading loading-spinner" />
-  <span>加载中…</span>
-</div>
-```
+- 本项目不引入无障碍专用规范与额外语义属性；聚焦内部使用的可维护性与一致视觉。
+- 主题采用 daisyUI 提供的 `light` 与 `dark`，默认跟随系统（light 默认、dark 作为 prefers-dark）。
 
 ---
 
@@ -379,19 +419,45 @@ import { IconPlayerPlay, IconCheck, IconX } from "@tabler/icons-react";
 
 ### 10.1 常见组合模式
 
-**卡片容器**:
+**v3.0 推荐使用工具函数**:
+```tsx
+import { cardClasses, cardBodyClasses, buttonClasses, inputClasses } from '../utils/classNames';
 ```
-card bg-base-200/70 shadow-xl
+
+**卡片容器**（顶层）:
+```typescript
+cardClasses()
+// 生成: card bg-base-200 shadow-sm
+```
+
+**卡片容器**（嵌套）:
+```typescript
+cardClasses({ variant: 'nested' })
+// 生成: card bg-base-100 border border-base-content/10
 ```
 
 **卡片body（标准间距）**:
-```
-card-body space-y-4
+```typescript
+cardBodyClasses()
+// 生成: card-body p-4 space-y-4
 ```
 
 **卡片body（紧凑）**:
+```typescript
+cardBodyClasses({ compact: true })
+// 生成: card-body p-4 space-y-3 text-sm
 ```
-card-body space-y-2 p-4 text-sm
+
+**按钮**:
+```typescript
+buttonClasses({ variant: 'primary', size: 'sm' })
+// 生成: btn btn-primary btn-sm
+```
+
+**输入框**:
+```typescript
+inputClasses({ type: 'text', size: 'sm' })
+// 生成: input input-bordered input-sm w-full
 ```
 
 **按钮组**:
@@ -430,26 +496,80 @@ text-base-content/60          // 弱化信息
 
 ### 11.2 使用className工具函数
 
-为避免重复和提高可维护性，使用 `src/ui/utils/classNames.ts` 中的工具函数：
+**v3.0 强制要求**：为避免重复和提高可维护性，必须使用 `src/ui/utils/classNames.ts` 中的工具函数：
 
 ```tsx
-import { cardClasses, buttonClasses } from '../utils/classNames';
+import {
+  cardClasses,
+  cardBodyClasses,
+  buttonClasses,
+  inputClasses,
+  alertClasses
+} from '../utils/classNames';
 
+// 顶层卡片
 <div className={cardClasses()}>
-  <button className={buttonClasses({ variant: 'primary', size: 'sm' })}>
-    提交
-  </button>
+  <div className={cardBodyClasses()}>
+    {/* 内容 */}
+  </div>
 </div>
+
+// 嵌套卡片
+<div className={cardClasses({ variant: 'nested' })}>
+  <div className={cardBodyClasses({ compact: true })}>
+    {/* 紧凑内容 */}
+  </div>
+</div>
+
+// 按钮
+<button className={buttonClasses({ variant: 'primary', size: 'sm' })}>
+  提交
+</button>
+
+// 输入框
+<input className={inputClasses({ size: 'sm' })} />
+```
+
+**禁止直接硬编码样式**：
+```tsx
+// ❌ 错误 - 不要硬编码
+<div className="card bg-base-200 shadow-sm">
+
+// ✅ 正确 - 使用工具函数
+<div className={cardClasses()}>
 ```
 
 ---
 
 ## 12. 常见问题（FAQ）
 
-### Q: 什么时候使用base-200/70，什么时候使用base-300/70？
-**A**: 统一使用 `bg-base-200/70`。`base-300`仅在需要嵌套卡片时作为外层卡片使用。
+### Q: v3.0 主要改了什么？
+**A**:
+1. **阴影最小化**：shadow-xl → shadow-sm（顶层）或 border（嵌套）
+2. **背景纯化**：移除所有 /70、/60 透明度，使用纯色
+3. **主题切换**：light/dark → corporate/business 专业主题
+4. **工具函数强制**：必须使用 cardClasses() 等工具函数
 
-### Q: 按钮应该用btn-sm还是btn-xs？
+### Q: 如何快速迁移现有组件到 v3.0？
+**A**:
+1. 导入工具函数：`import { cardClasses, cardBodyClasses } from '../utils/classNames'`
+2. 替换卡片：`className="card bg-base-300/70 shadow-xl"` → `className={cardClasses()}`
+3. 嵌套卡片：`className="card bg-base-200/70 border ..."` → `className={cardClasses({ variant: 'nested' })}`
+4. 卡片body：`className="card-body space-y-4"` → `className={cardBodyClasses()}`
+
+### Q: 什么时候使用 shadow-sm，什么时候使用 border？
+**A**:
+- **顶层卡片**：使用 `shadow-sm`（微妙阴影）→ `cardClasses()`
+- **嵌套卡片**：使用 `border`（边框区分）→ `cardClasses({ variant: 'nested' })`
+- **原则**：避免嵌套阴影造成视觉噪音
+
+### Q: bg-base-200 和 bg-base-100 如何选择？
+**A**:
+- `bg-base-200`：顶层卡片背景（深一级）
+- `bg-base-100`：嵌套卡片背景（浅一级）
+- **自动处理**：使用 `cardClasses()` 和 `cardClasses({ variant: 'nested' })` 自动应用正确背景
+
+### Q: 按钮应该用 btn-sm 还是 btn-xs？
 **A**: 主要操作按钮（执行、dry-run）使用 `btn-sm`，次要操作按钮（通过、拒绝）使用 `btn-xs`。
 
 ### Q: gap-2、gap-3、gap-4如何选择？
@@ -472,10 +592,45 @@ import { cardClasses, buttonClasses } from '../utils/classNames';
 ## 13. 更新记录
 
 | 版本 | 日期 | 变更内容 |
-|-----|------|---------|
+|-----|---------|---------|
+| 3.0.0 | 2025-10-18 | **重大更新**：阴影最小化、背景纯化、主题专业化、工具函数强制化 |
+| 2.0.0 | 2025-10-16 | 基于 DaisyUI 的初始设计规范 |
 | 1.0.0 | 2025-10-16 | 初始版本，建立基础设计规范 |
+
+### v3.0.0 详细变更
+
+**视觉优化**：
+- 阴影从 `shadow-xl` 简化为 `shadow-sm`（顶层）
+- 嵌套卡片使用边框代替阴影
+- 移除所有透明度（/70、/60），使用纯色背景
+- 背景层级：base-200（顶层）→ base-100（嵌套）
+
+**主题切换**：
+- 从 light/dark 切换到 corporate/business
+- corporate：明亮、专业、清爽
+- business：深色、专业、低对比度
+
+**工具函数强制化**：
+- 新增 `cardClasses()`、`cardBodyClasses()` 工具函数
+- 禁止硬编码卡片样式
+- 统一间距：p-4、space-y-4
+
+**文件变更**：
+- `app.css`：更新主题配置和全局样式
+- `classNames.ts`：新增卡片工具函数
+- 所有组件：迁移到工具函数
 
 ---
 
-**维护者**: Claude Code
+**维护者**: Claude Code (v3.0 重构)
 **反馈**: 如有设计规范问题或建议，请记录到 `.claude/operations-log.md`
+
+---
+
+## 14. 单入口与信息架构（SPA）
+
+- 单一路径：仅使用 `/` 作为入口；所有视图（监控、编辑、工具流、调度）在首页内部以“模式切换/抽屉/对话框”承载。
+- 深链策略：允许使用 URL search/hash 表达局部状态（如 `?tab=streams`、`#exec=123`），但不得新增路径段。
+- 四件套统一：加载/空态/错误/重试组件在各模式一致复用；尺寸与交互一致（目标尺寸≥24×24）。
+- 焦点管理：模式切换后将焦点置于主区域标题；Sticky 头部不得遮挡 focus（满足 WCAG 2.4.11）。
+- 键盘路径：Tab/Shift+Tab/Enter/Esc 全路径可达；对话框遵循 APG 模式（role=dialog, aria-modal）。

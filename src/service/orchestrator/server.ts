@@ -9,7 +9,7 @@ import multipart from "@fastify/multipart";
 import type { WebSocket } from "ws";
 
 import { OrchestratorController } from "./controller.js";
-import type { ExecutePlanRequest, ValidationRequest, ManualApprovalRequestInput } from "./controller.js";
+import type { ExecutePlanRequest, ValidationRequest } from "./controller.js";
 import {
   ORCHESTRATOR_EVENT_TOPICS,
   type OrchestratorEventTopic,
@@ -17,23 +17,25 @@ import {
 } from "./types.js";
 import type { LogsAppendedPayload } from "../../shared/logging/events.js";
 import { setLogEventPublisher, createLoggerFacade } from "../../shared/logging/logger.js";
-import { listMcpServers } from "../../mcp/config/loader.js";
 import {
   EventEnvelopeSchema,
   EventNameSchema,
   EventPayloadSchemaMap
 } from "./eventSchema.js";
 import type { EventName } from "./eventSchema.js";
-import { join as pathJoin, dirname, basename as pathBasename } from "node:path";
-import { readdir, readFile, writeFile, mkdir, stat, unlink, rm } from "node:fs/promises";
-import { watch } from "node:fs";
+import { join as pathJoin } from "node:path";
+import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import { joinConfigPath } from "../../shared/environment/pathResolver.js";
-import { Cron } from "croner";
+
+// 内建调度已删除：不再使用环境开关
 
 export interface OrchestratorServiceOptions {
   readonly basePath?: string;
   readonly controller?: OrchestratorController;
   readonly controllerOptions?: ConstructorParameters<typeof OrchestratorController>[0];
+  readonly plansDirectory?: string;
+  readonly executionsDirectory?: string;
+  readonly databasePath?: string;
 }
 
 interface ValidateBody {
@@ -46,33 +48,10 @@ interface ExecuteBody extends ValidateBody {
   mcpServer?: string;
 }
 
-interface ApprovalDecisionBody {
-  decision?: string;
-  comment?: string;
-  decidedBy?: string;
-}
-
-// McpQuery接口已移除：使用内联类型注解以避免未使用警告
-
-interface McpCallBody {
-  arguments?: Record<string, unknown>;
-  nodeId?: string;
-  riskLevel?: "low" | "medium" | "high";
-  useMockBridge?: boolean;
-  mcpServer?: string;
-}
-
 // —— Request DTOs ——
 interface DesignerCompileBody { graph?: { nodes: unknown[]; edges: unknown[] } }
 interface DryRunBody { plan?: unknown; fromNode?: string }
 
-interface ToolStreamParams {
-  id: string;
-}
-
-interface ToolStreamDetailParams extends ToolStreamParams {
-  correlationId: string;
-}
 
 interface ClientConnection {
   readonly socket: WebSocket;
@@ -106,20 +85,6 @@ function isValidTopic(value: string): value is OrchestratorEventTopic {
   return (ORCHESTRATOR_EVENT_TOPICS as readonly string[]).includes(value);
 }
 
-function parseBoolean(value: string | boolean | undefined): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    if (value === "1" || value.toLowerCase() === "true") {
-      return true;
-    }
-    if (value === "0" || value.toLowerCase() === "false") {
-      return false;
-    }
-  }
-  return undefined;
-}
 
 function parseTopicsParam(param: TopicsInput): Set<OrchestratorEventTopic> {
   if (!param) {
@@ -248,6 +213,15 @@ function parseSubscriptionMessage(raw: string): OrchestratorSubscriptionMessage 
 }
 
 import { registerAgentRoutes } from "./agents/routes.js";
+import { plansPlugin } from "./plugins/plans.plugin.js";
+import { executionsPlugin } from "./plugins/executions.plugin.js";
+import { fsPlugin } from "./plugins/fs.plugin.js";
+import { mcpPlugin } from "./plugins/mcp.plugin.js";
+import { approvalsPlugin } from "./plugins/approvals.plugin.js";
+import { fastifyAwilixPlugin } from "@fastify/awilix";
+import { createOrchestratorContainer, resolveController } from "./di/container.js";
+import type { AwilixContainer } from "awilix";
+import type { OrchestratorCradle } from "./di/container.js";
 
 export async function createOrchestratorService(
   options: OrchestratorServiceOptions = {}
@@ -255,6 +229,7 @@ export async function createOrchestratorService(
   app: any;
   controller: OrchestratorController;
   publishLogEvent: (payload: LogsAppendedPayload) => void;
+  container: AwilixContainer<OrchestratorCradle>;
 }> {
   const basePath = options.basePath ?? "/api/v1";
   const app: any = (fastify as any)({ logger: false });
@@ -267,8 +242,41 @@ export async function createOrchestratorService(
   });
   await app.register(multipart);
 
-  const controller =
-    options.controller ?? new OrchestratorController(options.controllerOptions ?? {});
+  // 创建DI容器并传递目录选项（仅在已定义时设置，避免 exactOptionalPropertyTypes 冲突）
+  const containerOpts: Parameters<typeof createOrchestratorContainer>[0] = {
+    controllerOptions: options.controllerOptions ?? {}
+  };
+  if (options.plansDirectory !== undefined) {
+    (containerOpts as any).plansDirectory = options.plansDirectory;
+  }
+  if (options.executionsDirectory !== undefined) {
+    (containerOpts as any).executionsDirectory = options.executionsDirectory;
+  }
+  if (options.databasePath !== undefined) {
+    (containerOpts as any).databasePath = options.databasePath;
+  }
+  const container = createOrchestratorContainer(containerOpts);
+
+  // 注册fastify-awilix插件（可选，用于请求级scope）
+  await app.register(fastifyAwilixPlugin, {
+    disposeOnClose: true,
+    disposeOnResponse: false, // 我们暂时不需要请求级依赖
+    asyncInit: false,
+    asyncDispose: true,
+    eagerInject: false
+  });
+
+  // 从DI容器解析Controller和Repositories
+  const controller = options.controller ?? resolveController(container);
+  const plansRepository = container.resolve("plansRepository");
+  const executionsRepository = container.resolve("executionsRepository");
+
+  // 注册 Plans、Executions、FS、MCP 和 Approvals 插件
+  await app.register(plansPlugin, { repository: plansRepository });
+  await app.register(executionsPlugin, { repository: executionsRepository, controller });
+  await app.register(fsPlugin);
+  await app.register(mcpPlugin, { controller });
+  await app.register(approvalsPlugin, { controller });
 
   const clients = new Set<ClientConnection>();
   (app as unknown as { __eventBusClients?: Set<ClientConnection> }).__eventBusClients = clients;
@@ -338,26 +346,18 @@ export async function createOrchestratorService(
     broadcast("runtime.state-change", payload, executionId)
   );
   controller.on("runtime.execution-start", ({ executionId, planId }) => {
-    scheduleLastRun.set(planId, { executionId, status: "running", startedAt: new Date().toISOString() });
     broadcast("runtime.execution-start", { planId }, executionId);
   });
   controller.on("runtime.execution-complete", ({ executionId, result }) => {
-    scheduleLastRun.set(result.planId, { executionId, status: result.status, startedAt: result.startedAt?.toISOString?.() ?? undefined, finishedAt: result.finishedAt?.toISOString?.() ?? undefined });
     broadcast("runtime.execution-complete", result, executionId);
   });
   controller.on("runtime.error", ({ executionId, error }) => {
     // 在错误情况下无法可靠获知 planId，这里仅广播
     broadcast("runtime.error", error, executionId);
   });
-  controller.on("execution.failed", ({ executionId }) => {
-    const record = controller.getExecution(executionId);
-    if (record) {
-      scheduleLastRun.set(record.planId, { executionId, status: "failed", startedAt: record.startedAt, finishedAt: record.finishedAt });
-    }
-  });
   controller.on("execution.cancelled", ({ executionId, planId }) => {
-    const record = controller.getExecution(executionId);
-    scheduleLastRun.set(planId, { executionId, status: "cancelled", startedAt: record?.startedAt, finishedAt: record?.finishedAt });
+    // 广播保留
+    broadcast("execution.cancelled", { planId }, executionId);
   });
   controller.on("runtime.snapshot", ({ executionId, snapshot }) =>
     broadcast("runtime.snapshot", snapshot, executionId)
@@ -392,23 +392,11 @@ export async function createOrchestratorService(
 
   const validateRoute = `${basePath}/plans/validate`;
   const executeRoute = `${basePath}/plans/execute`;
-  const plansRoute = `${basePath}/plans`;
-  const executionsRoute = `${basePath}/executions`;
-  const approvalsRoute = `${basePath}/approvals`;
-  const stopRoute = `${executionsRoute}/:id/stop`;
-  const toolStreamsRoute = `${executionsRoute}/:id/tool-streams`;
   const toolStreamsGlobalRoute = `${basePath}/tool-streams`;
-  const mcpServersRoute = `${basePath}/mcp/servers`;
-  const mcpToolsRoute = `${basePath}/mcp/tools`;
   const examplesRoute = `${basePath}/plans/examples`;
-  const fsRoute = `${basePath}/fs`;
   const designerCompileRoute = `${basePath}/designer/compile`;
   const planDryRunRoute = `${basePath}/plans/dry-run`;
   const systemEventBusRoute = `${basePath}/system/event-bus`;
-
-  // —— Agents & ChatKit（feature flags） ——
-  const AGENTS_ENABLED = String(process.env.AGENTS_ENABLED || "0");
-  const CHATKIT_ENABLED = String(process.env.CHATKIT_ENABLED || "0");
 
   // —— Plans Store（配置目录 .hush-ops/config/plans）——
   async function getPlansDir(): Promise<string> {
@@ -419,76 +407,17 @@ export async function createOrchestratorService(
   function sanitizeId(value: string): string {
     return value.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 128);
   }
-  async function readPlanFile(filePath: string): Promise<unknown> {
-    const raw = await readFile(filePath, "utf-8");
-    return JSON.parse(raw) as unknown;
-  }
   async function writePlanFile(filePath: string, plan: unknown): Promise<void> {
     const json = JSON.stringify(plan, null, 2);
     await writeFile(filePath, json, "utf-8");
   }
-  async function fileExists(filePath: string): Promise<boolean> {
-    try { const s = await stat(filePath); return s.isFile(); } catch { return false; }
-  }
 
-  // —— 通用 FS 辅助（后端统一包装，前端只发起调用）——
-  type FSScope = 'plansRepo' | 'plansConfig' | 'state' | 'archives' | 'logs';
+  // —— 通用 FS 辅助（已迁移至 plugins/fs.plugin.ts）——
 
-  async function resolveScopeDir(scope: FSScope): Promise<string> {
-    switch (scope) {
-      case 'plansRepo': return pathJoin(process.cwd(), 'plans');
-      case 'plansConfig': return getPlansDir();
-      case 'state': return joinConfigPath('..', 'state');
-      case 'archives': return pathJoin(joinConfigPath('..', 'state'), 'archives');
-      case 'logs': return joinConfigPath('..', 'logs');
-      default: return getPlansDir();
-    }
-  }
+  // 注册 Agents 路由
+  try { registerAgentRoutes(app as any, basePath, controller); } catch {}
 
-  async function resolvePathWithin(scope: FSScope, relPath: string): Promise<{abs: string, base: string}> {
-    const base = await resolveScopeDir(scope);
-    const abs = pathJoin(base, relPath || '.');
-    const normBase = base.replace(/\\/g,'/');
-    const normAbs = abs.replace(/\\/g,'/');
-    if (!normAbs.startsWith(normBase)) {
-      throw new Error('路径越界');
-    }
-    return { abs, base };
-  }
-
-  // 注册 Agents 路由（默认关闭，通过环境变量开启）
-  if (AGENTS_ENABLED === "1" || CHATKIT_ENABLED === "1") {
-    try { registerAgentRoutes(app as any, basePath, controller); } catch {}
-  }
-
-  app.get(mcpServersRoute, async () => {
-    const servers = await listMcpServers().catch(() => []);
-    return {
-      servers: servers.map((server) => ({
-        name: server.name,
-        description: server.description ?? undefined
-      }))
-    };
-  });
-
-  app.get(mcpToolsRoute, async (
-    request: { query?: { useMockBridge?: string | boolean; mcpServer?: string } },
-    reply: any
-  ) => {
-    const query = request.query;
-    const useMockBridge = parseBoolean(query?.useMockBridge as any);
-    try {
-      const tools = await controller.listMcpTools({
-        useMockBridge,
-        mcpServer: typeof query?.mcpServer === "string" ? (query.mcpServer as string) : undefined
-      });
-      return { tools };
-    } catch (error) {
-      reply.code(502);
-      const message = error instanceof Error ? error.message : String(error);
-      return { error: { code: "mcp_list_failed", message } };
-    }
-  });
+  // —— MCP 路由 —— (Migrated to plugins/mcp.plugin.ts)
 
   // —— Example Plans ——
   app.get(examplesRoute, async () => {
@@ -530,29 +459,6 @@ export async function createOrchestratorService(
     }
   });
 
-  app.post(`${mcpToolsRoute}/:toolName`, async (
-    request: { params: { toolName: string }; body?: McpCallBody },
-    reply: any
-  ) => {
-    const { toolName } = request.params;
-    const body = request.body;
-    try {
-      const result = await controller.callMcpTool({
-        toolName,
-        arguments: body?.arguments,
-        nodeId: body?.nodeId,
-        riskLevel: body?.riskLevel,
-        useMockBridge: body?.useMockBridge,
-        mcpServer: body?.mcpServer
-      });
-      return { result };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      reply.code(502);
-      return { error: { code: "mcp_call_failed", message } };
-    }
-  });
-
   // —— Designer 编译（Graph -> Plan + 诊断）——
   app.post(designerCompileRoute, async (request: { body: DesignerCompileBody }, reply: any) => {
     try {
@@ -586,311 +492,9 @@ export async function createOrchestratorService(
     }
   });
 
-  // —— FS（后端统一包装文件/目录操作）——
-  app.get(`${fsRoute}/list`, async (
-    request: { query?: { scope?: FSScope; path?: string } },
-    reply: any
-  ) => {
-    const q = request.query;
-    const scope = (q?.scope ?? 'plansConfig') as FSScope;
-    const { abs } = await resolvePathWithin(scope, q?.path ?? '.');
-    let s: Awaited<ReturnType<typeof stat>>;
-    try { s = await stat(abs); } catch { reply.code(404); return { error: { code: 'not_found', message: '路径不存在' } }; }
-    if (!s.isDirectory()) { reply.code(400); return { error: { code: 'not_directory', message: '路径不是目录' } }; }
-    const names = await readdir(abs);
-    const entries = [] as Array<{ name: string; type: 'file'|'dir'; size: number; modifiedAt: string }>;
-    for (const name of names) {
-      try {
-        const info = await stat(pathJoin(abs, name));
-        entries.push({ name, type: info.isDirectory() ? 'dir' : 'file', size: Number(info.size ?? 0), modifiedAt: new Date(info.mtimeMs).toISOString() });
-      } catch {}
-    }
-    return { entries };
-  });
+  // —— FS（后端统一包装文件/目录操作）—— (Migrated to plugins/fs.plugin.ts)
 
-  app.get(`${fsRoute}/read`, async (
-    request: { query?: { scope?: FSScope; path?: string; download?: string } },
-    reply: any
-  ) => {
-    const q = request.query;
-    const scope = (q?.scope ?? 'plansConfig') as FSScope;
-    const rel = q?.path ?? '';
-    const { abs } = await resolvePathWithin(scope, rel);
-    try {
-      const s = await stat(abs);
-      if (!s.isFile()) { reply.code(400); return { error: { code: 'not_file', message: '目标不是文件' } }; }
-      const text = await readFile(abs, 'utf-8');
-      const downloading = (q?.download ?? '0') === '1';
-      if (downloading) {
-        reply.header('Content-Type', 'application/json; charset=utf-8');
-        reply.header('Content-Disposition', `attachment; filename="${rel.replace(/[^a-zA-Z0-9_.-]/g,'_')}"`);
-        return reply.send(text);
-      }
-      return { path: rel, content: text };
-    } catch (e) {
-      reply.code(404); return { error: { code: 'read_failed', message: (e as Error).message } };
-    }
-  });
-
-  app.post(`${fsRoute}/write`, async (request: any, reply: any) => {
-    const body = request.body as { scope?: FSScope; path?: string; content?: string; overwrite?: boolean } | undefined;
-    const scope = (body?.scope ?? 'plansConfig') as FSScope;
-    const rel = body?.path ?? '';
-    const { abs } = await resolvePathWithin(scope, rel);
-    try {
-      // Windows 设备名防护（同时适用于多数平台）：CON/PRN/AUX/NUL/COM1..9/LPT1..9（允许扩展名变体）
-      const base = pathBasename(abs);
-      if (/^(?:(?:CON|PRN|AUX|NUL)|(?:COM[1-9])|(?:LPT[1-9]))(?:\..*)?$/i.test(base)) {
-        reply.code(400);
-        return { error: { code: 'invalid_name', message: '保留设备名不可用' } };
-      }
-      const dir = dirname(abs); await mkdir(dir, { recursive: true });
-      const exists = await stat(abs).then(s=>s.isFile()).catch(()=>false);
-      if (exists && body?.overwrite === false) { reply.code(409); return { error: { code: 'exists', message: '文件已存在' } }; }
-      await writeFile(abs, body?.content ?? '', 'utf-8');
-      return { saved: true };
-    } catch (e) {
-      reply.code(422); return { error: { code: 'write_failed', message: (e as Error).message } };
-    }
-  });
-
-  app.post(`${fsRoute}/mkdir`, async (
-    request: { body?: { scope?: FSScope; path?: string } },
-    _reply: any
-  ) => {
-    const body = request.body as { scope?: FSScope; path?: string } | undefined;
-    const scope = (body?.scope ?? 'plansConfig') as FSScope;
-    const { abs } = await resolvePathWithin(scope, body?.path ?? '');
-    await mkdir(abs, { recursive: true });
-    return { created: true };
-  });
-
-  app.post(`${fsRoute}/move`, async (
-    request: { body?: { scope?: FSScope; from?: string; to?: string } },
-    reply: any
-  ) => {
-    const body = request.body as { scope?: FSScope; from?: string; to?: string } | undefined;
-    const scope = (body?.scope ?? 'plansConfig') as FSScope;
-    const { abs: fromAbs } = await resolvePathWithin(scope, body?.from ?? '');
-    const { abs: toAbs } = await resolvePathWithin(scope, body?.to ?? '');
-    try {
-      const dir = dirname(toAbs); await mkdir(dir, { recursive: true });
-      await writeFile(toAbs, await readFile(fromAbs));
-      await unlink(fromAbs).catch(()=>{});
-      return { moved: true };
-    } catch (e) {
-      reply.code(422); return { error: { code: 'move_failed', message: (e as Error).message } };
-    }
-  });
-
-  app.delete(`${fsRoute}/delete`, async (
-    request: { body?: { scope?: FSScope; path?: string; recursive?: boolean } },
-    reply: any
-  ) => {
-    const body = request.body as { scope?: FSScope; path?: string; recursive?: boolean } | undefined;
-    const scope = (body?.scope ?? 'plansConfig') as FSScope;
-    const { abs } = await resolvePathWithin(scope, body?.path ?? '');
-    try {
-      const s = await stat(abs);
-      if (s.isDirectory()) {
-        await rm(abs, { recursive: !!body?.recursive, force: true });
-      } else {
-        await unlink(abs);
-      }
-      return { deleted: true };
-    } catch (e) {
-      reply.code(422); return { error: { code: 'delete_failed', message: (e as Error).message } };
-    }
-  });
-
-  // —— Plans CRUD ——
-  app.get(plansRoute, async (request: { query?: { limit?: string; offset?: string } }) => {
-    const dir = await getPlansDir();
-    let files = await readdir(dir).catch(() => []);
-    // 若没有任何计划文件，自动创建一个默认空计划 plans.json
-    if (!files.some((n) => n.toLowerCase().endsWith('.json'))) {
-      const defaultPlan = { id: 'plans', description: '空计划', nodes: [] } as const;
-      await writePlanFile(pathJoin(dir, 'plans.json'), defaultPlan).catch(() => void 0);
-      files = await readdir(dir).catch(() => []);
-    }
-    const summaries: Array<{ id: string; description?: string; version?: string }> = [];
-    for (const name of files) {
-      if (!name.endsWith('.json')) continue;
-      const id = name.replace(/\.json$/i, '');
-      try {
-        const plan = (await readPlanFile(pathJoin(dir, name))) as { id?: string; description?: string; version?: string };
-        summaries.push({ id: plan.id ?? id, description: plan.description, version: plan.version });
-      } catch {
-        summaries.push({ id });
-      }
-    }
-    const q = request.query as { limit?: string; offset?: string } | undefined;
-    const limit = Math.max(0, Math.min(1000, Number(q?.limit ?? '0') || 0));
-    const offset = Math.max(0, Number(q?.offset ?? '0') || 0);
-    const total = summaries.length;
-    const plans = limit > 0 ? summaries.slice(offset, offset + limit) : summaries;
-    return { total, plans };
-  });
-
-  app.get(`${plansRoute}/:id`, async (
-    request: { params: { id: string } },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    const dir = await getPlansDir();
-    const safeId = sanitizeId(id);
-    const filePath = pathJoin(dir, `${safeId}.json`);
-    if (!(await fileExists(filePath))) {
-      reply.code(404);
-      return { error: { code: 'plan_not_found', message: `未找到计划 ${safeId}` } };
-    }
-    try {
-      const plan = await readPlanFile(filePath);
-      return plan;
-    } catch (error) {
-      reply.code(500);
-      return { error: { code: 'plan_read_failed', message: (error as Error).message } };
-    }
-  });
-
-  app.post(plansRoute, async (
-    request: { body?: { plan?: unknown } },
-    reply: any
-  ) => {
-    const body = request.body as { plan?: unknown } | undefined;
-    if (!body?.plan) { reply.code(400); return { error: { code: 'bad_request', message: 'plan 字段必填' } }; }
-    try {
-      // 可选：校验 Plan 结构
-      const parsed = body.plan; // 若需严格校验，可启用 PlanSchema.parse
-      const id = (parsed as any)?.id ? sanitizeId(String((parsed as any).id)) : `plan-${Date.now()}`;
-      (parsed as any).id = id;
-      const dir = await getPlansDir();
-      const filePath = pathJoin(dir, `${id}.json`);
-      await writePlanFile(filePath, parsed);
-      reply.code(201);
-      return { id };
-    } catch (error) {
-      reply.code(422);
-      return { error: { code: 'plan_create_failed', message: (error as Error).message } };
-    }
-  });
-
-  // 计划导入（上传文本版；由后端写入 plansConfig，前端不触碰文件系统）
-  app.post(`${plansRoute}/import`, async (
-    request: { body?: { filename?: string; content?: string } },
-    reply: any
-  ) => {
-    const body = request.body as { filename?: string; content?: string } | undefined;
-    if (!body?.content) { reply.code(400); return { error: { code: 'bad_request', message: 'content 必填（计划 JSON 文本）' } }; }
-    try {
-      const plan = JSON.parse(body.content);
-      const id = (plan?.id && typeof plan.id === 'string') ? sanitizeId(plan.id) : (body.filename ? sanitizeId(body.filename.replace(/\.json$/i,'')) : `plan-${Date.now()}`);
-      plan.id = id;
-      const dir = await getPlansDir();
-      await writePlanFile(pathJoin(dir, `${id}.json`), plan);
-      reply.code(201);
-      return { id };
-    } catch (e) {
-      reply.code(422); return { error: { code: 'plan_import_failed', message: (e as Error).message } };
-    }
-  });
-
-  // 计划上传（multipart）
-  app.post(`${plansRoute}/upload`, async (request: any, reply: any) => {
-    try {
-      const parts = request.parts();
-      let imported = 0; const ids: string[] = [];
-      for await (const part of parts) {
-        if (part.type !== 'file') continue;
-        const filename = typeof part.filename === 'string' ? part.filename : `plan-${Date.now()}.json`;
-        const content = await part.toBuffer();
-        try {
-          const json = JSON.parse(content.toString('utf-8')) as any;
-          const id = (json?.id && typeof json.id === 'string') ? sanitizeId(json.id) : sanitizeId(filename.replace(/\.json$/i,''));
-          json.id = id;
-          const dir = await getPlansDir();
-          await writePlanFile(pathJoin(dir, `${id}.json`), json);
-          ids.push(id); imported++;
-        } catch {
-          // 单个文件失败不影响其他
-        }
-      }
-      if (imported === 0) { reply.code(422); return { error: { code: 'upload_empty', message: '未解析到任何有效计划' } }; }
-      reply.code(201); return { imported, ids };
-    } catch (e) {
-      reply.code(422); return { error: { code: 'upload_failed', message: (e as Error).message } };
-    }
-  });
-
-  app.put(`${plansRoute}/:id`, async (
-    request: { params: { id: string }; body?: { plan?: unknown } },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    const body = request.body as { plan?: unknown } | undefined;
-    if (!body?.plan) { reply.code(400); return { error: { code: 'bad_request', message: 'plan 字段必填' } }; }
-    try {
-      const dir = await getPlansDir();
-      const safeId = sanitizeId(id);
-      const filePath = pathJoin(dir, `${safeId}.json`);
-      const parsed = body.plan; (parsed as any).id = safeId;
-      await writePlanFile(filePath, parsed);
-      return { id: safeId };
-    } catch (error) {
-      reply.code(422);
-      return { error: { code: 'plan_update_failed', message: (error as Error).message } };
-    }
-  });
-
-  // 触发指定计划执行（按 id 加载，支持仓库 plans/ 与配置 plans/）
-  app.post(`${plansRoute}/:id/execute`, async (
-    request: { params: { id: string }; body?: { mcpServer?: string } },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    const safeId = sanitizeId(id);
-    const repoPlansDir = pathJoin(process.cwd(), "plans");
-    const configPlansDir = await getPlansDir();
-    const candidates = [pathJoin(configPlansDir, `${safeId}.json`), pathJoin(repoPlansDir, `${safeId}.json`)];
-    let plan: unknown | null = null;
-    for (const candidate of candidates) {
-      try {
-        const s = await stat(candidate);
-        if (s.isFile()) {
-          plan = await readPlanFile(candidate);
-          break;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    if (!plan) {
-      reply.code(404);
-      return { error: { code: 'plan_not_found', message: `未找到计划 ${safeId}` } };
-    }
-    try {
-      const body = request.body as { mcpServer?: string } | undefined;
-      const record = await controller.execute({ plan, mcpServer: body?.mcpServer });
-      return { executionId: record.id, status: record.status, planId: record.planId };
-    } catch (error) {
-      reply.code(500);
-      return { error: { code: 'execution_failed', message: (error as Error).message } };
-    }
-  });
-
-  app.delete(`${plansRoute}/:id`, async (
-    request: { params: { id: string } },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    const dir = await getPlansDir();
-    const safeId = sanitizeId(id);
-    const filePath = pathJoin(dir, `${safeId}.json`);
-    if (!(await fileExists(filePath))) { reply.code(404); return { error: { code: 'plan_not_found', message: `未找到计划 ${safeId}` } }; }
-    await unlink(filePath).catch(() => {});
-    reply.code(204);
-    return null as any;
-  });
+  // —— Plans CRUD —— (Migrated to plugins/plans.plugin.ts)
 
   // —— Validate/Execute ——
   app.post(validateRoute, async (
@@ -935,156 +539,7 @@ export async function createOrchestratorService(
     }
   });
 
-  app.get(executionsRoute, async (request: { query?: { limit?: string; offset?: string } }) => {
-    const q = request.query;
-    const limit = Math.max(0, Math.min(1000, Number(q?.limit ?? '0') || 0));
-    const offset = Math.max(0, Number(q?.offset ?? '0') || 0);
-    const all = controller.listExecutions();
-    const total = all.length;
-    const executions = limit > 0 ? all.slice(offset, offset + limit) : all;
-    return { total, executions };
-  });
-
-  app.post(stopRoute, async (
-    request: { params: { id: string } },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    try {
-      const record = await controller.stopExecution(id);
-      return { execution: record };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("找不到执行")) {
-        reply.code(404);
-        return { error: { code: "execution_not_found", message } };
-      }
-      reply.code(422);
-      return { error: { code: "execution_stop_failed", message } };
-    }
-  });
-
-  app.get(`${executionsRoute}/:id`, async (
-    request: { params: { id: string } },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    const record = controller.getExecution(id);
-    if (!record) {
-      reply.code(404);
-      return { error: { code: "execution_not_found", message: `未找到执行 ${id}` } };
-    }
-    return record;
-  });
-
-  app.get(toolStreamsRoute, async (
-    request: { params: ToolStreamParams },
-    reply: any
-  ) => {
-    const { id } = request.params;
-    const record = controller.getExecution(id);
-    if (!record) {
-      reply.code(404);
-      return { error: { code: "execution_not_found", message: `未找到执行 ${id}` } };
-    }
-    const streams = controller.listToolStreamSummaries(id).map((stream) => ({
-      correlationId: stream.correlationId,
-      toolName: stream.toolName,
-      executionId: stream.executionId ?? undefined,
-      planId: stream.planId ?? undefined,
-      nodeId: stream.nodeId ?? undefined,
-      chunkCount: stream.chunkCount,
-      latestSequence: stream.latestSequence,
-      updatedAt: stream.updatedAt,
-      completed: stream.completed,
-      hasError: stream.hasError
-    }));
-    return { streams };
-  });
-
-  app.get(`${toolStreamsRoute}/:correlationId`, async (
-    request: { params: ToolStreamDetailParams },
-    reply: any
-  ) => {
-    const { id, correlationId } = request.params;
-    const record = controller.getExecution(id);
-    if (!record) {
-      reply.code(404);
-      return { error: { code: "execution_not_found", message: `未找到执行 ${id}` } };
-    }
-    const chunks = controller.getToolStreamChunks(id, correlationId).map((chunk) => ({
-      toolName: chunk.toolName,
-      message: chunk.message,
-      timestamp: chunk.timestamp,
-      status: chunk.status,
-      correlationId: chunk.correlationId,
-      executionId: chunk.executionId ?? undefined,
-      planId: chunk.planId ?? undefined,
-      nodeId: chunk.nodeId ?? undefined,
-      error: chunk.error ?? undefined,
-      sequence: chunk.sequence,
-      storedAt: chunk.storedAt,
-      source: chunk.source ?? undefined
-    }));
-    return { chunks };
-  });
-
-  // 导出工具流明细（由后端生成文件，前端仅下载）
-  app.get(`${toolStreamsRoute}/:correlationId/export`, async (
-    request: { params: ToolStreamDetailParams; query?: { format?: string; compress?: string } },
-    reply: any
-  ) => {
-    const { id, correlationId } = request.params;
-    const record = controller.getExecution(id);
-    if (!record) {
-      reply.code(404);
-      return { error: { code: "execution_not_found", message: `未找到执行 ${id}` } };
-    }
-    const query = request.query;
-    const fmt = (query?.format ?? 'json').toString(); // json|ndjson
-    const compress = (query?.compress ?? '0').toString() === '1';
-    const chunks = controller.getToolStreamChunks(id, correlationId);
-    if (!chunks || chunks.length === 0) {
-      reply.code(404);
-      return { error: { code: 'tool_stream_not_found', message: `未找到流式输出 ${correlationId}` } };
-    }
-    const filenameBase = `toolstream-${id}-${correlationId}-${new Date().toISOString().replace(/[:.]/g,'-')}`;
-    let payload = '';
-    if (fmt === 'ndjson') {
-      payload = chunks.map((c)=> JSON.stringify(c)).join('\n') + '\n';
-      reply.header('Content-Type', 'application/x-ndjson; charset=utf-8');
-      reply.header('Content-Disposition', `attachment; filename="${filenameBase}.ndjson${compress?'.gz':''}"`);
-    } else {
-      payload = JSON.stringify({ executionId: id, correlationId, chunks }, null, 2) + '\n';
-      reply.header('Content-Type', 'application/json; charset=utf-8');
-      reply.header('Content-Disposition', `attachment; filename="${filenameBase}.json${compress?'.gz':''}"`);
-    }
-    if (compress) {
-      const zlib = await import('node:zlib');
-      const gz = zlib.gzipSync(Buffer.from(payload, 'utf-8'));
-      reply.header('Content-Encoding', 'gzip');
-      return reply.send(gz);
-    }
-    return reply.send(payload);
-  });
-
-  app.post(`${toolStreamsRoute}/:correlationId/replay`, async (
-    request: { params: ToolStreamDetailParams },
-    reply: any
-  ) => {
-    const { id, correlationId } = request.params;
-    const record = controller.getExecution(id);
-    if (!record) {
-      reply.code(404);
-      return { error: { code: "execution_not_found", message: `未找到执行 ${id}` } };
-    }
-    const replayed = controller.replayToolStream(id, correlationId);
-    if (replayed === 0) {
-      reply.code(404);
-      return { error: { code: "tool_stream_not_found", message: `未找到流式输出 ${correlationId}` } };
-    }
-    return { replayed };
-  });
+  // —— Executions Routes —— (Migrated to plugins/executions.plugin.ts)
 
   // —— Global Tool Streams ——
   app.get(toolStreamsGlobalRoute, async (request: { query?: { executionId?: string; limit?: string; offset?: string; onlyErrors?: string; tool?: string; correlationPrefix?: string; updatedAfter?: string; updatedBefore?: string } }) => {
@@ -1196,9 +651,7 @@ export async function createOrchestratorService(
     };
     doc.paths[`${basePath}/plans/{id}/execute`] = { post: { summary: 'Execute plan by id', responses: { 200: { description: 'OK' }, ...problemResponses({ '404': { title: 'Plan not found', status: 404 }, '500': { title: 'Execution failed', status: 500 } }) } } };
 
-    doc.paths[`${basePath}/schedules`] = { get: { summary: 'List schedules', parameters: [stringParam('source','repo|config',["repo","config"]), integerParam('within','minutes window'), stringParam('sort','nextAsc|nextDesc',["nextAsc","nextDesc"]), integerParam('limit','Max items'), integerParam('offset','Start offset')], responses: { 200: { description: 'OK' }, ...problemResponses() } } };
-    doc.paths[`${basePath}/schedules/export`] = { get: { summary: 'Export schedules', responses: { 200: { description: 'OK' }, ...problemResponses() } } };
-    doc.paths[`${basePath}/schedules/reload`] = { post: { summary: 'Reload schedules', responses: { 200: { description: 'OK' }, ...problemResponses({ '500': { title: 'Reload failed', status: 500 } }) } } };
+    // 已移除内建调度：不再暴露 /schedules 相关路径
 
     doc.paths[`${basePath}/executions`] = { get: { summary: 'List executions', parameters: [integerParam('limit','Max items'), integerParam('offset','Start offset')], responses: { 200: { description: 'OK' }, ...problemResponses() } } };
     doc.paths[`${basePath}/executions/{id}`] = { get: { summary: 'Get execution', responses: { 200: { description: 'OK' }, ...problemResponses({ '404': { title: 'Execution not found', status: 404 } }) } } };
@@ -1236,7 +689,7 @@ export async function createOrchestratorService(
     // —— components.schemas （简化）——
     doc.components.schemas.PlanSummary = { type: 'object', properties: { id: { type: 'string' }, version: { type: 'string' }, entry: { type: 'string' } } };
     doc.components.schemas.ExecutionItem = { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' }, startedAt: { type: 'string', nullable: true }, finishedAt: { type: 'string', nullable: true } } };
-    doc.components.schemas.ScheduleItem = { type: 'object', properties: { planId: { type: 'string' }, cron: { type: 'string' }, source: { type: 'string' }, file: { type: 'string' }, dir: { type: 'string' }, nextRunISO: { type: 'string', nullable: true }, lastStatus: { type: 'string', nullable: true }, lastStartedAt: { type: 'string', nullable: true }, lastFinishedAt: { type: 'string', nullable: true } } };
+    // 已移除内建调度：不再提供 ScheduleItem schema
     doc.components.schemas.DiagnosticsItem = { type: 'object', properties: { code: { type: 'string' }, severity: { type: 'string', enum: ['error','warning','info'] }, message: { type: 'string' }, nodeId: { type: 'string' }, edgeId: { type: 'string' } } };
     doc.components.schemas.Graph = { type: 'object', properties: { nodes: { type: 'array', items: { type: 'object' } }, edges: { type: 'array', items: { type: 'object' } } }, required: ['nodes','edges'] };
     doc.components.schemas.TimelineEvent = { type: 'object', properties: { t: { type: 'string' }, status: { type: 'string' }, nodeId: { type: 'string' } } };
@@ -1244,260 +697,15 @@ export async function createOrchestratorService(
     return doc;
   });
 
-  // 计划级调度：扫描 plans 目录并按 cron 设置定时执行
-  const schedulerLogger = createLoggerFacade("plan-scheduler");
-  type ScheduledMeta = { job: Cron; planId: string; cron: string; file: string; dir: string; source: 'repo' | 'config' };
-  const scheduledJobs: ScheduledMeta[] = [];
-  const scheduleLastRun = new Map<string, { executionId: string; status: string; startedAt?: string; finishedAt?: string }>();
+  // 内建调度已移除：不再扫描计划目录、注册 Cron 任务或监听文件变更
 
-  async function stopAllSchedules() {
-    for (const entry of scheduledJobs) {
-      try { entry.job.stop(); } catch {}
-    }
-    scheduledJobs.length = 0;
-  }
+  // 内建调度已移除：不再提供 /schedules 列表接口
 
-  async function reloadPlanScheduler() {
-    try {
-      await stopAllSchedules();
-      // 同时扫描仓库 plans 与配置目录 .hush-ops/config/plans
-      const repoPlansDir = pathJoin(process.cwd(), "plans");
-      const configPlansDir = await getPlansDir();
-      const candidateDirs: Array<{ dir: string; source: 'repo' | 'config' }> = [
-        { dir: repoPlansDir, source: 'repo' },
-        { dir: configPlansDir, source: 'config' }
-      ];
+  // 内建调度已移除：不再提供 /schedules/export 接口
 
-      for (const { dir: plansDir, source } of candidateDirs) {
-        let statInfo: Awaited<ReturnType<typeof stat>> | null = null;
-        try {
-          statInfo = await stat(plansDir);
-        } catch {
-          schedulerLogger.warn("未发现计划目录，跳过该路径", { plansDir });
-          continue;
-        }
-        if (!statInfo || !statInfo.isDirectory()) {
-          schedulerLogger.warn("路径不是目录，跳过该路径", { plansDir });
-          continue;
-        }
-        const files = await readdir(plansDir);
-        for (const filename of files) {
-          if (!filename.endsWith(".json")) continue;
-          try {
-            const raw = await readFile(pathJoin(plansDir, filename), "utf-8");
-            const plan = JSON.parse(raw) as Record<string, unknown>;
-            const schedule = (plan as any).schedule ?? {};
-            if (!schedule || schedule.enabled !== true) continue;
-            if (schedule.kind !== "cron" || typeof schedule.cron !== "string") continue;
+  // 内建调度已移除：不再提供 /schedules/reload 接口
 
-            const options: ConstructorParameters<typeof Cron>[1] = { protect: true } as any;
-            if (schedule.window?.startISO) (options as any).startAt = new Date(schedule.window.startISO);
-            if (schedule.window?.endISO) (options as any).stopAt = new Date(schedule.window.endISO);
-
-            const job = new Cron(schedule.cron, options, async () => {
-              try {
-                schedulerLogger.info("触发计划执行", { planId: (plan as any).id, file: filename, dir: plansDir });
-                await controller.execute({ plan });
-              } catch (error) {
-                schedulerLogger.error("计划执行失败", {
-                  planId: (plan as any).id,
-                  error: error instanceof Error ? error.message : String(error)
-                });
-              }
-            });
-            scheduledJobs.push({ job, planId: (plan as any).id ?? filename.replace(/\.json$/i, ''), cron: schedule.cron, file: filename, dir: plansDir, source });
-            schedulerLogger.info("已注册计划调度", { planId: (plan as any).id, cron: schedule.cron, file: filename, dir: plansDir, source });
-          } catch (error) {
-            schedulerLogger.warn("读取或解析计划失败，已跳过", { file: filename, dir: plansDir, error: error instanceof Error ? error.message : String(error) });
-          }
-        }
-      }
-      return scheduledJobs.length;
-    } catch (error) {
-      schedulerLogger.error("初始化/重载计划调度时发生错误", { error: error instanceof Error ? error.message : String(error) });
-      return 0;
-    }
-  }
-
-  // 启动时初始化调度
-  await reloadPlanScheduler();
-
-  // 可选：监控计划目录变更并自动重载（设置环境变量 ORCHESTRATOR_SCHEDULE_WATCH=1 开启）
-  const watchers: Array<ReturnType<typeof watch>> = [];
-  const shouldWatch = process.env.ORCHESTRATOR_SCHEDULE_WATCH === '1';
-  if (shouldWatch) {
-    const repoPlansDir = pathJoin(process.cwd(), "plans");
-    const configPlansDir = await getPlansDir();
-    const debounce = (fn: () => void, ms: number) => {
-      let t: NodeJS.Timeout | null = null;
-      return () => { if (t) clearTimeout(t); t = setTimeout(() => fn(), ms); };
-    };
-    const onChange = debounce(() => {
-      schedulerLogger.info("检测到计划文件变更，准备重载...");
-      void reloadPlanScheduler();
-    }, Number(process.env.ORCHESTRATOR_RELOAD_DEBOUNCE_MS ?? 1000));
-    for (const dir of [repoPlansDir, configPlansDir]) {
-      try {
-        const s = await stat(dir);
-        if (!s.isDirectory()) continue;
-        const w = watch(dir, { persistent: true }, (_event, filename) => {
-          if (filename && filename.toString().toLowerCase().endsWith('.json')) onChange();
-        });
-        watchers.push(w);
-        schedulerLogger.info("已开启计划目录监听", { dir });
-      } catch { /* ignore */ }
-    }
-  }
-
-  // 关闭时：停止全部任务与文件监听
-  app.addHook("onClose", async () => {
-    await stopAllSchedules();
-    for (const w of watchers) { try { w.close(); } catch {} }
-  });
-
-  // 关闭时停止全部已注册的调度任务
-  app.addHook("onClose", async () => {
-    await stopAllSchedules();
-  });
-
-  // Schedules 列表（只读，支持服务端筛选/分页）
-  app.get(`${basePath}/schedules`, async (request: any) => {
-    const q = (request as any).query as { source?: string; within?: string; sort?: string; limit?: string; offset?: string } | undefined;
-    const source = (q?.source ?? '').toString();
-    const withinMin = Number(q?.within ?? '');
-    const sort = (q?.sort ?? 'nextAsc').toString(); // nextAsc|nextDesc
-    const limit = Math.max(0, Math.min(1000, Number(q?.limit ?? '0') || 0));
-    const offset = Math.max(0, Number(q?.offset ?? '0') || 0);
-    const now = Date.now();
-    const windowMs = Number.isFinite(withinMin) && withinMin > 0 ? withinMin * 60_000 : null;
-    let items = scheduledJobs.map((entry) => {
-      const last = scheduleLastRun.get(entry.planId);
-      return {
-        planId: entry.planId,
-        cron: entry.cron,
-        file: entry.file,
-        dir: entry.dir,
-        source: entry.source,
-        nextRunISO: entry.job.nextRun()?.toISOString() ?? null,
-        lastRun: last ?? null
-      };
-    });
-    if (source === 'repo' || source === 'config') items = items.filter(i => i.source === source);
-    if (windowMs) items = items.filter(i => i.nextRunISO && (new Date(i.nextRunISO).getTime() - now) <= windowMs && new Date(i.nextRunISO).getTime() >= now);
-    const score = (iso: string | null) => (iso ? new Date(iso).getTime() : Number.POSITIVE_INFINITY);
-    items.sort((a,b)=> sort === 'nextAsc' ? (score(a.nextRunISO) - score(b.nextRunISO)) : (score(b.nextRunISO) - score(a.nextRunISO)));
-    const total = items.length;
-    const sliced = limit > 0 ? items.slice(offset, offset + limit) : items;
-    return { total, schedules: sliced };
-  });
-
-  // Schedules 导出（json|csv）
-  app.get(`${basePath}/schedules/export`, async (request: any, reply: any) => {
-    const q = (request as any).query as { format?: string } | undefined;
-    const format = (q?.format ?? 'json').toString();
-    const items = scheduledJobs.map((entry) => {
-      const last = scheduleLastRun.get(entry.planId);
-      return {
-        planId: entry.planId,
-        cron: entry.cron,
-        source: entry.source,
-        file: entry.file,
-        dir: entry.dir,
-        nextRunISO: entry.job.nextRun()?.toISOString() ?? null,
-        lastStatus: last?.status ?? null,
-        lastStartedAt: last?.startedAt ?? null,
-        lastFinishedAt: last?.finishedAt ?? null
-      };
-    });
-    // 为了稳定导出顺序，按 planId 升序排序，避免不同来源（repo/config）加载顺序影响
-    items.sort((a, b) => String(a.planId).localeCompare(String(b.planId)));
-    if (format === 'csv') {
-      const header = ['planId','cron','source','file','dir','nextRunISO','lastStatus','lastStartedAt','lastFinishedAt'];
-      const csvEscape = (val: unknown): string => {
-        let s = String(val ?? "");
-        if (s.includes('"')) s = s.replace(/"/g, '""');
-        const needsQuote = /[",\r\n]/.test(s);
-        return needsQuote ? `"${s}"` : s;
-      };
-      const rows: string[] = [];
-      rows.push(header.join(','));
-      for (const it of items) {
-        const cols = header.map(h => csvEscape((it as any)[h]));
-        rows.push(cols.join(','));
-      }
-      const csv = rows.join('\r\n') + '\r\n';
-      reply.header('Content-Type', 'text/csv; charset=utf-8');
-      reply.header('Content-Disposition', `attachment; filename="schedules-${new Date().toISOString().replace(/[:.]/g,'-')}.csv"`);
-      return reply.send(csv);
-    }
-    reply.header('Content-Type', 'application/json; charset=utf-8');
-    reply.header('Content-Disposition', `attachment; filename="schedules-${new Date().toISOString().replace(/[:.]/g,'-')}.json"`);
-    return reply.send(JSON.stringify({ schedules: items }, null, 2));
-  });
-
-  // 手动重载调度
-  app.post(`${basePath}/schedules/reload`, async () => {
-    const count = await reloadPlanScheduler();
-    return { reloaded: true, count };
-  });
-
-  app.get(`${approvalsRoute}/pending`, async () => {
-    const approvals = await controller.listPendingApprovals();
-    return { approvals };
-  });
-
-  app.post(`${approvalsRoute}/request`, async (request: any, reply: any) => {
-    const body = request.body as ManualApprovalRequestInput | undefined;
-    if (!body) {
-      reply.code(400);
-      return { error: { code: "bad_request", message: "请求体不能为空" } };
-    }
-    if (!body.executionId && (!body.planId || !body.nodeId)) {
-      reply.code(400);
-      return {
-        error: {
-          code: "bad_request",
-          message: "缺少 executionId 或 planId/nodeId 信息"
-        }
-      };
-    }
-    try {
-      const approval = await controller.requestApproval(body);
-      reply.code(201);
-      return { approval };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      reply.code(500);
-      return { error: { code: "approval_request_failed", message } };
-    }
-  });
-
-  app.post(`${approvalsRoute}/:id/decision`, async (request: any, reply: any) => {
-    const { id } = request.params as { id: string };
-    const body = request.body as ApprovalDecisionBody | undefined;
-    const decision = body?.decision;
-    if (decision !== "approved" && decision !== "rejected") {
-      reply.code(400);
-      return { error: { code: "bad_request", message: "decision 必须为 approved 或 rejected" } };
-    }
-    try {
-      const approval = await controller.recordApprovalDecision({
-        id,
-        decision,
-        comment: body?.comment,
-        decidedBy: body?.decidedBy ?? "web-ui"
-      });
-      return { approval };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("找不到待审批项")) {
-        reply.code(404);
-        return { error: { code: "approval_not_found", message } };
-      }
-      reply.code(422);
-      return { error: { code: "approval_update_failed", message } };
-    }
-  });
+  // —— Approvals 路由 —— (Migrated to plugins/approvals.plugin.ts)
 
   // 内部复用的 WS 连接初始化与保活逻辑（测试可复用）
   function initWsConnection(socket: WebSocket, topicsParam?: TopicsInput) {
@@ -1573,7 +781,9 @@ export async function createOrchestratorService(
 
   app.addHook("onClose", async () => {
     controller.close();
+    // 等待DI容器dispose所有资源
+    await container.dispose();
   });
 
-  return { app, controller, publishLogEvent };
+  return { app, controller, publishLogEvent, container };
 }

@@ -1,6 +1,7 @@
 import React from "react";
 import { ExecutionList } from "../../components/ExecutionList";
 import { PendingApprovals } from "../../components/PendingApprovals";
+import { cardClasses } from "../../utils/classNames";
 
 export interface MonitorShellProps {
   executions: Parameters<typeof ExecutionList>[0]["executions"];
@@ -8,6 +9,7 @@ export interface MonitorShellProps {
   stopProcessingId: string | null;
   onRefresh: () => Promise<void> | void;
   onStop: (id: string) => Promise<void> | void;
+  onOpenExecution?: (id: string) => void;
   approvals: Parameters<typeof PendingApprovals>[0]["entries"];
   commentMap: Parameters<typeof PendingApprovals>[0]["commentMap"];
   onCommentChange: (id: string, value: string) => void;
@@ -35,16 +37,14 @@ export default function MonitorShell(props: MonitorShellProps) {
 
   return (
     <div className="space-y-3">
-      <div className="alert alert-info text-xs">
-        <span>监控视图（只读）：可查看执行与待审批，编辑请切换到“编辑器”。</span>
-      </div>
 
-      <div className="card bg-base-200/60 border border-base-content/10">
-        <div className="card-body p-3">
+      <div className={cardClasses({ variant: "nested" })}>
+        <div className="card-body p-4">
           <h3 className="text-sm font-semibold opacity-70 mb-2">执行列表</h3>
           <ExecutionList
             onRefresh={async () => { await onRefresh?.(); }}
             onStop={async (id: string) => { await onStop?.(id); }}
+            onOpenDetails={(id: string) => { props.onOpenExecution?.(id); }}
             executions={executions}
             loading={execLoading}
             disabled={false}
@@ -53,13 +53,13 @@ export default function MonitorShell(props: MonitorShellProps) {
         </div>
       </div>
 
-      <div className="card bg-base-200/60 border border-base-content/10">
-        <div className="card-body p-3">
+      <div className={cardClasses({ variant: "nested" })}>
+        <div className="card-body p-4">
           <h3 className="text-sm font-semibold opacity-70 mb-2">待审批</h3>
           <PendingApprovals
-            entries={approvals}
+            entries={approvals ?? []}
             disabled={false}
-            commentMap={commentMap}
+            commentMap={commentMap ?? {}}
             onCommentChange={onCommentChange}
             onApprove={async (id: string) => { await onApprove?.(id); }}
             onReject={async (id: string) => { await onReject?.(id); }}

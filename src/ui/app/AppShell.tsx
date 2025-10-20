@@ -1,12 +1,13 @@
-import React, { Suspense, useMemo, useState } from "react";
-import { Link, Outlet } from "@tanstack/react-router";
+import React, { Suspense, useState } from "react";
+import { Outlet, Link } from "@tanstack/react-router";
 import { IconSettings } from "@tabler/icons-react";
 import { useBridgeConnection } from "../hooks/useBridgeConnection";
 import { appStore, isAppStoreEnabled, useAppStoreSelector } from "../state/appStore";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { PluginRuntimeProvider } from "../plugins/runtime";
-import { fetchExecutions, getBaseUrl } from "../services";
+import { fetchExecutions } from "../services";
 const DesignerSettingsLazy = React.lazy(() => import("../pages/Designer/Settings").then(m => ({ default: m.DesignerSettings })));
+const ToolStreamsLazy = React.lazy(() => import("../pages/ToolStreams").then(m => ({ default: m.default })));
 
 
 const TOPICS = ["runtime", "bridge", "execution", "approvals"] as const;
@@ -28,42 +29,26 @@ export function AppShell() {
     }
   });
 
-  const navItems = useMemo(
-    () => [
-      { to: "/", label: "Dashboard" },
-      { to: "/schedules", label: "Schedules" },
-      { to: "/tool-streams", label: "Tool Streams" },
-      // 实验：对话（受后端开关控制，未开启时访问将返回 404）
-      { to: "/chat", label: "Chat (实验)" },
-      { to: "/chatkit", label: "ChatKit (实验)" }
-      // 编辑器入口已并入 Dashboard（Edit 模式），/designer 导航移除
-    ],
-    []
-  );
+  // 单入口模式：移除多路由导航，仅保留顶部工具条
   const bridgeState = useAppStoreSelector((s)=> s.runtime.bridgeState);
 
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   return (
     <div className="min-h-screen bg-base-100 text-base-content">
-      <div role="banner" className="sticky top-0 z-20 bg-base-200/80 border-b border-base-content/10 backdrop-blur h-7 px-2 flex items-center justify-between">
-        <div className="flex-1 min-w-0">
-          <span className="font-semibold tracking-wide text-[11px] leading-none">hush-ops</span>
+      <div role="banner" className="sticky top-0 z-20 bg-base-200/80 border-b border-base-content/10 backdrop-blur h-8 px-2 flex items-center justify-between">
+        <div className="flex-1 min-w-0 flex items-center gap-3">
+          <Link to="/" aria-label="返回首页" className="inline-flex items-center gap-2">
+            <img src="/logo.svg" alt="hush-ops" className="h-4 w-auto" />
+          </Link>
+          <nav aria-label="主导航" className="hidden sm:flex items-center gap-3 text-[12px]">
+            <Link to="/" className="link link-hover" activeProps={{ 'aria-current': 'page' }}>首页</Link>
+            <Link to="/test-hub" className="link link-hover" activeProps={{ 'aria-current': 'page' }}>TestHub</Link>
+          </nav>
         </div>
         <div className="flex items-center gap-3">
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${
             bridgeState === 'connected' ? 'bg-success' : bridgeState === 'disconnected' ? 'bg-error' : 'bg-warning'
           }`} aria-label="连接状态" />
-          <span className="opacity-30 select-none">|</span>
-          <button
-            aria-label="API 文档（JSON）"
-            className="inline-flex items-center justify-center px-2 py-1 text-[11px] rounded-md hover:bg-base-300/60 active:bg-base-300/80 transition"
-            onClick={() => {
-              const base = getBaseUrl();
-              window.open(`${base}/openapi.json`, '_blank');
-            }}
-          >
-            API 文档
-          </button>
           <button
             aria-label="设置"
             className="inline-flex items-center justify-center p-1 rounded-md hover:bg-base-300/60 active:bg-base-300/80 transition"
@@ -103,6 +88,16 @@ export function AppShell() {
               )}
             </div>
           </div>
+          <div className="divider my-2" />
+          <div className="space-y-2">
+            <h4 className="font-medium text-sm">运行与审计</h4>
+            <button
+              type="button"
+              className="btn btn-sm w-full"
+              onClick={() => { (document.getElementById('toolstreams-modal') as HTMLDialogElement)?.showModal(); }}
+            >运行日志（工具流）</button>
+          </div>
+
           <div className="modal-action">
             <form method="dialog">
               <button className="btn btn-sm">关闭</button>
@@ -113,12 +108,27 @@ export function AppShell() {
           <button>close</button>
         </form>
       </dialog>
-      <main className="container mx-auto p-4">
-        <div className="tabs tabs-bordered mb-3">
-          {navItems.map((n) => (
-            <Link key={n.to} to={n.to} className={"tab tab-bordered tab-sm"}>{n.label}</Link>
-          ))}
+
+      {/* 工具流抽屉/对话框 */}
+      <dialog id="toolstreams-modal" className="modal">
+        <div className="modal-box max-w-5xl w-full">
+          <h3 className="font-semibold mb-2">运行日志（工具流）</h3>
+          <div className="min-h-[360px]">
+            <Suspense fallback={<div className="text-sm opacity-60">加载工具流…</div>}>
+              <ToolStreamsLazy />
+            </Suspense>
+          </div>
+          <div className="modal-action">
+            <form method="dialog"><button className="btn btn-sm">关闭</button></form>
+          </div>
         </div>
+        <form method="dialog" className="modal-backdrop">
+          <button>close</button>
+        </form>
+      </dialog>
+
+      <main id="main-content" className="container mx-auto p-4" tabIndex={-1}>
+        {/* 单入口：不再显示多页 Tab 导航，所有视图均在 Dashboard 内切换 */}
         <PluginRuntimeProvider>
           <ErrorBoundary>
             <Suspense fallback={<div className="text-sm opacity-60">加载中…</div>}>

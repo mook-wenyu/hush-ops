@@ -29,7 +29,7 @@
 
 ## 安全与配置
 - 禁止提交密钥；使用环境变量（检查 `config/mcp.servers.json` 与 `VITE_*`）。
-- 运行环境：Node >= 20，建议 `npm@10`（已在 `package.json#packageManager` 固定）。
+- 运行环境：Node >= 22（2025-10-28 起建议 24 LTS），建议 `npm@10`（已在 `package.json#packageManager` 固定）。
 - 前端一切文件操作必须走后端封装的 FS API，禁止直接访问本地文件系统。
 
 ## 计划、调度与编辑器
